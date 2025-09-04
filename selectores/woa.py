@@ -12,7 +12,7 @@ def _fitness(
     individual: np.ndarray,
     estimator: Optional[ClassifierMixin] = None,
     cv: int = 5,
-    penalty_weight: float = 0.01,
+    penalty_weight: float = 0.1,
     random_state: Optional[int] = None,
 ) -> float:
     """
