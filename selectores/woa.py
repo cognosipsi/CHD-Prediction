@@ -45,7 +45,7 @@ def woa_feature_selection(
     max_iter: int = 50,          # = mlpWOA.py
     estimator: Optional[ClassifierMixin] = None,
     cv: int = 5,
-    penalty_weight: float = 0.01,
+    penalty_weight: float = 0.1,
     random_state: Optional[int] = 42,
 ) -> Tuple[np.ndarray, float]:
     """
