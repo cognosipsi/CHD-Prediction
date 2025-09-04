@@ -1,0 +1,191 @@
+# pipelines/mlp_pipeline.py
+from __future__ import annotations
+from typing import Tuple, Optional
+import time
+import numpy as np
+
+from preprocesamiento.lectura_datos import load_data
+from preprocesamiento.codificacion import encode_features
+from preprocesamiento.escalado import scale_features, scale_train_test
+from preprocesamiento.division_dataset import split_data
+
+# Selectores
+from selectores.bsocv import bso_cv
+from selectores.mabc import m_abc_feature_selection
+from selectores.woa import woa_feature_selection
+from selectores.eliminacionpearson import eliminar_redundancias
+
+# Predictor
+from predictores.mlp import mlp_train
+
+# Reporte
+from utils.evaluacion import print_metrics_from_values
+
+
+def mlp_pipeline(
+    file_path: str = "SAHeart.csv",
+    selector: Optional[str] = "woa",
+    *,
+    encoding_method: str = "manual",
+    scaler_type: str = "minmax",      # = mlpWOA.py
+    redundancy: Optional[str] = "none",
+    hidden_layer_sizes=(100,),
+    activation: str = "relu",
+    solver: str = "adam",
+    max_iter: int = 500,              # = mlpWOA.py
+    random_state: int = 42,
+    early_stopping: bool = False,     # = mlpWOA.py
+    tol: float = 1e-4,
+    **selector_params,
+) -> Tuple[float, float, float, float, float]:
+    """
+    Pipeline MLP con selección de características (BSO-CV / M-ABC / WOA) y escalado post-split
+    (sin fuga de información), configurado para replicar el comportamiento del script monolítico.
+    """
+    t0 = time.time()
+
+    # Compatibilidad: permitir selector_params={"selector_params": {...}}
+    if "selector_params" in selector_params and isinstance(selector_params["selector_params"], dict):
+        selector_params = dict(selector_params["selector_params"])
+
+    # 1) Carga y codificación
+    df = load_data(file_path)
+    df = encode_features(df, encoding_method=encoding_method)
+    df = df.drop(columns=["row.names"], errors="ignore")
+
+    # 2) Redundancias (opcional)
+    if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
+        df = eliminar_redundancias(df, metodo=redundancy)
+
+    # 3) X, y
+    if "chd" not in df.columns:
+        raise ValueError("La columna objetivo 'chd' no se encuentra en el dataset.")
+    X_df = df.drop(columns=["chd"])
+    y = df["chd"].values
+
+    # 4) Selección de características (opcional) — incluye BSO-CV, M-ABC y WOA
+    X_sel = X_df
+    selector_name = None
+    mask_for_report = None
+    fitness_for_report = None
+
+    if selector is not None and str(selector).lower() not in {"none", "sin", "no"}:
+        sel = selector.strip().lower()
+
+        if sel in ("bso", "bso-cv", "bsocv"):
+            # Igual que antes: no requiere escalado global
+            population_size = int(selector_params.get("population_size", 20))
+            max_iter_s      = int(selector_params.get("max_iter", 50))
+            cv              = int(selector_params.get("cv", 5))
+            random_state_b  = selector_params.get("random_state", None)
+            penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
+            verbose         = bool(selector_params.get("verbose", False))
+
+            best_mask, best_fitness = bso_cv(
+                X_df, df["chd"],
+                population_size=population_size,
+                max_iter=max_iter_s,
+                cv=cv,
+                random_state=random_state_b,
+                penalty_weight=penalty_weight,
+                verbose=verbose,
+            )
+            selected_idx = [i for i, b in enumerate(best_mask) if b == 1]
+            X_sel = X_df.iloc[:, selected_idx] if selected_idx else X_df
+            selector_name = f"BSO-CV (pop={population_size}, iters={max_iter_s}, cv={cv})"
+            mask_for_report = list(map(int, best_mask))
+            fitness_for_report = float(best_fitness)
+
+        elif sel in ("m-abc", "mabc", "m_abc"):
+            # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
+            X_scaled_all = scale_features(X_df.values, scaler_type=scaler_type)
+            X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_scaled_all, y)
+
+            pop_size     = int(selector_params.get("pop_size", 20))
+            max_cycles   = int(selector_params.get("max_cycles", selector_params.get("max_iter", 30)))
+            limit        = int(selector_params.get("limit", 5))
+            patience     = int(selector_params.get("patience", 10))
+            random_state_s = selector_params.get("random_state", 42)
+            cv_folds     = int(selector_params.get("cv_folds", 5))
+            knn_k        = int(selector_params.get("knn_k", 5))
+            verbose      = bool(selector_params.get("verbose", False))
+
+            best_mask, best_fitness = m_abc_feature_selection(
+                X_train_s, X_test_s, y_train_s, y_test_s,
+                use_custom_evaluator=False,     # KNN CV interno (rápido)
+                pop_size=pop_size,
+                max_cycles=max_cycles,
+                limit=limit,
+                patience=patience,
+                random_state=random_state_s,
+                cv_folds=cv_folds,
+                knn_k=knn_k,
+                verbose=verbose,
+            )
+
+            idx = np.where(best_mask == 1)[0]
+            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
+            selector_name = f"M-ABC (pop={pop_size}, cycles={max_cycles}, cv={cv_folds})"
+            mask_for_report = list(map(int, best_mask))
+            fitness_for_report = float(best_fitness)
+
+        elif sel in ("woa", "whale", "whale-optimization"):
+            # Igual que el monolítico: escala TODO X para el fitness
+            X_scaled_all = scale_features(X_df.values, scaler_type=scaler_type)
+
+            # Defaults emparejados al script original
+            woa_pop   = int(selector_params.get("population_size", 30))
+            woa_iters = int(selector_params.get("max_iter", 50))
+            woa_cv    = int(selector_params.get("cv", 5))
+            woa_pen   = float(selector_params.get("penalty_weight", 0.01))
+            woa_seed  = selector_params.get("random_state", random_state)
+
+            best_mask, best_fitness = woa_feature_selection(
+                X_scaled_all,
+                y,
+                population_size=woa_pop,
+                max_iter=woa_iters,
+                estimator=selector_params.get("estimator", None),
+                cv=woa_cv,
+                penalty_weight=woa_pen,
+                random_state=woa_seed,
+            )
+
+            idx = np.where(best_mask == 1)[0]
+            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
+            selector_name = f"WOA (pop={woa_pop}, iters={woa_iters}, cv={woa_cv}, pen={woa_pen})"
+            mask_for_report = list(map(int, best_mask))
+            fitness_for_report = float(best_fitness)
+
+        else:
+            raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
+
+    # 5) Split y escalado PARA EL MLP (igual que monolítico; sin fuga)
+    #    Nota: fijamos test_size=0.2 para replicar mlpWOA.py
+    X_train, X_test, y_train, y_test = split_data(X_sel.values, y, test_size=0.2, random_state=random_state)
+    X_train, X_test, _ = scale_train_test(X_train, X_test, scaler_type=scaler_type)
+
+    # 6) Entrenar y evaluar MLP
+    accuracy, precision, recall, f1, auc = mlp_train(
+        X_train, y_train, X_test, y_test,
+        hidden_layer_sizes=hidden_layer_sizes,
+        activation=activation,
+        solver=solver,
+        max_iter=max_iter,
+        random_state=random_state,
+        early_stopping=early_stopping,
+        tol=tol,
+    )
+
+    # 7) Reporte
+    elapsed = round(time.time() - t0, 4)
+    print_metrics_from_values(
+        accuracy, precision, recall, f1, auc,
+        selector_name=selector_name,
+        selected_columns=list(X_sel.columns),
+        mask=mask_for_report,
+        fitness=fitness_for_report,
+        extra_info={"tiempo_s": elapsed},
+    )
+
+    return accuracy, precision, recall, f1, auc
