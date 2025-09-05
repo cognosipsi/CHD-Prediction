@@ -1,6 +1,6 @@
 from typing import Any, Dict, Iterable, Mapping, Optional
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 )
 
 def compute_classification_metrics(
@@ -19,6 +19,14 @@ def compute_classification_metrics(
         "f1": f1_score(y_true, y_pred, zero_division=0),
     }
     metrics["auc"] = roc_auc_score(y_true, y_prob) if y_prob is not None else float("nan")
+
+        # Calculando la matriz de confusión para obtener los valores de los TP, TN, FP y FN
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    metrics["true_positive"] = tp
+    metrics["false_positive"] = fp
+    metrics["true_negative"] = tn
+    metrics["false_negative"] = fn
+
     return metrics
 
 def _print_extra_info(extra_info: Mapping[str, Any]) -> None:
@@ -72,6 +80,10 @@ def print_metrics(
     rec = metrics.get("recall", float("nan"))
     f1  = metrics.get("f1", float("nan"))
     auc = metrics.get("auc", float("nan"))
+    tp  = metrics.get("true_positive", float("nan"))
+    fp  = metrics.get("false_positive", float("nan"))
+    tn  = metrics.get("true_negative", float("nan"))
+    fn  = metrics.get("false_negative", float("nan"))
 
     print(f"Accuracy:  {acc:.4f}" if isinstance(acc, (int, float)) else f"Accuracy:  {acc}")
     print(f"Precision: {pre:.4f}" if isinstance(pre, (int, float)) else f"Precision: {pre}")
@@ -81,6 +93,10 @@ def print_metrics(
         print(f"AUC:       {auc:.4f}")
     else:
         print("AUC:       N/A")
+    print(f"True Positive:  {tp}")
+    print(f"False Positive: {fp}")
+    print(f"True Negative:  {tn}")
+    print(f"False Negative: {fn}")
 
 def print_metrics_from_values(
     accuracy: float,
