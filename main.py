@@ -9,6 +9,7 @@ from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
 from preprocesamiento.escalado import scale_features
 from preprocesamiento.division_dataset import split_data
+from preprocesamiento.smote import apply_smote  # Importamos SMOTE
 
 # Selectores (para construir parámetros por defecto)
 from selectores.bsocv import bso_cv
@@ -137,6 +138,22 @@ if __name__ == "__main__":
     print(f"\nEjecutando pipeline: {modelo.upper()} | selector={selector} | "
           f"encoding={encoding_method} | scaler={scaler_type} | redundancy={redundancy} | archivo={file_path}",
           flush=True)
+
+    # Cargar los datos
+    df = load_data(file_path)
+
+    # Codificar características
+    df = encode_features(df, encoding_method)
+
+    # Separar las características y etiquetas
+    X = df.drop("chd", axis=1)
+    y = df["chd"]
+
+    # Aplicar SMOTE para balancear el dataset
+    X_resampled, y_resampled = apply_smote(X, y)
+
+    # Dividir los datos en entrenamiento y prueba
+    X_train, X_test, y_train, y_test = split_data(X_resampled, y_resampled)
 
     # Ejecutar pipeline y mostrar resultado
     res = PIPELINES[modelo](
