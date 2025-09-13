@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from utils.evaluacion import compute_classification_metrics
 
 # Parámetros por defecto (sin 'use_label_encoder', deprecado)
 DEFAULT_PARAMS: Dict[str, Any] = dict(
@@ -37,17 +38,10 @@ def fit_and_predict(
     y_pred = model.predict(X_test)
     try:
         y_proba = model.predict_proba(X_test)[:, 1]
-        auc = roc_auc_score(y_test, y_proba)
     except Exception:
-        auc = float("nan")
+        y_proba = None
 
-    metrics = {
-        "accuracy": accuracy_score(y_test, y_pred),
-        "precision": precision_score(y_test, y_pred, zero_division=0),
-        "recall": recall_score(y_test, y_pred, zero_division=0),
-        "f1": f1_score(y_test, y_pred, zero_division=0),
-        "auc": auc,
-    }
+    metrics = compute_classification_metrics(y_test, y_pred, y_proba)
     return metrics
 
 # --- Compatibilidad retro opcional ---

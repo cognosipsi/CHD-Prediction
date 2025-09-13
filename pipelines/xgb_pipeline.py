@@ -22,6 +22,7 @@ from selectores.eliminacionpearson import eliminar_redundancias
 
 # === Reporte (igual que MLP) ===
 from utils.evaluacion import print_metrics_from_values
+from utils.evaluacion import print_from_pipeline_result
 
 
 def _apply_mask_df(X_df: pd.DataFrame, mask: np.ndarray) -> pd.DataFrame:
@@ -194,22 +195,6 @@ def xgb_pipeline(
     # 9) Reporte (idéntico al estilo del MLP)
     selected_columns: List[str] = list(X_sel_df.columns)
     elapsed = round(time.time() - t0, 4)
-    print_metrics_from_values(
-        metrics.get("accuracy", float("nan")),
-        metrics.get("precision", float("nan")),
-        metrics.get("recall", float("nan")),
-        metrics.get("f1", float("nan")),
-        metrics.get("auc", float("nan")),
-        model="XGBClassifier",
-        selector_name=selector_name if selector_name != 'none' else None,
-        selected_columns=selected_columns,
-        mask=feature_mask.tolist() if feature_mask is not None else None,
-        fitness=fitness_for_report,
-        elapsed_seconds=elapsed,
-        extra_info={"tiempo_s": elapsed},
-    )
-
-    # 10) Empaquetar resultado
     result: Dict[str, Any] = {
         "model": "XGBClassifier",
         "selector": selector_name,
@@ -224,4 +209,5 @@ def xgb_pipeline(
     if fitness_for_report is not None:
         result["selector_fitness"] = fitness_for_report
 
+    print_from_pipeline_result(result)
     return result
