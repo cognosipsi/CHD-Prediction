@@ -13,7 +13,7 @@ def mlp_train(
     random_state=42,
     early_stopping=True,
     tol=1e-4
-) -> Tuple[float, float, float, float, float]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Entrena un MLP y retorna métricas (accuracy, precision, recall, f1, auc).
     """
@@ -31,15 +31,9 @@ def mlp_train(
     y_pred = clf.predict(X_test)
     try:
         y_proba = clf.predict_proba(X_test)[:, 1]
-        auc = roc_auc_score(y_test, y_proba)
     except Exception:
-        auc = float("nan")
-
-    acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred, zero_division=0)
-    rec = recall_score(y_test, y_pred, zero_division=0)
-    f1  = f1_score(y_test, y_pred, zero_division=0)
-    return acc, prec, rec, f1, auc
+        y_proba = None
+    return y_pred, y_proba, y_test
 
 def mlp_evaluator(
     X_train: np.ndarray,

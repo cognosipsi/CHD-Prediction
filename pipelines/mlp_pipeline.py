@@ -20,7 +20,7 @@ from predictores.mlp import mlp_train
 
 # Reporte
 from utils.evaluacion import print_metrics_from_values
-
+from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
 def mlp_pipeline(
     file_path: str = "SAHeart.csv",
@@ -37,7 +37,7 @@ def mlp_pipeline(
     early_stopping: bool = False,     # = mlpWOA.py
     tol: float = 1e-4,
     **selector_params,
-) -> Tuple[float, float, float, float, float]:
+) -> dict:
     """
     Pipeline MLP con selección de características (BSO-CV / M-ABC / WOA) y escalado post-split
     (sin fuga de información), configurado para replicar el comportamiento del script monolítico.
@@ -166,7 +166,7 @@ def mlp_pipeline(
     X_train, X_test, _ = scale_train_test(X_train, X_test, scaler_type=scaler_type)
 
     # 6) Entrenar y evaluar MLP
-    accuracy, precision, recall, f1, auc = mlp_train(
+    y_pred, y_proba, y_test_real = mlp_train(
         X_train, y_train, X_test, y_test,
         hidden_layer_sizes=hidden_layer_sizes,
         activation=activation,
@@ -177,15 +177,19 @@ def mlp_pipeline(
         tol=tol,
     )
 
+    metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
+
     # 7) Reporte
     elapsed = round(time.time() - t0, 4)
-    print_metrics_from_values(
-        accuracy, precision, recall, f1, auc,
-        selector_name=selector_name,
-        selected_columns=list(X_sel.columns),
-        mask=mask_for_report,
-        fitness=fitness_for_report,
-        extra_info={"tiempo_s": elapsed},
-    )
-
-    return accuracy, precision, recall, f1, auc
+    result = {
+        "model": "mlp",
+        "selector": selector_name,
+        "metrics": metrics,
+        "selected_features": list(X_sel.columns),
+        "mask": mask_for_report,
+        "selector_fitness": fitness_for_report,
+        "elapsed_seconds": elapsed,
+        "extra_info": {"tiempo_s": elapsed},
+    }
+    print_from_pipeline_result(result)
+    return result
