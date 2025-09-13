@@ -2,7 +2,6 @@ from typing import Optional, Dict, Any, Tuple
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from utils.evaluacion import compute_classification_metrics
 
 # Parámetros por defecto (sin 'use_label_encoder', deprecado)
