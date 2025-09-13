@@ -15,10 +15,11 @@ from selectores.woa import woa_feature_selection
 from selectores.eliminacionpearson import eliminar_redundancias
 
 # Predictores (ahora sí existen ambas funciones)
-from predictores.transformer import transformer_train, transformer_evaluator
+from predictores.transformer import transformer_train
 
 # Utilidades de evaluación
 from utils.evaluacion import print_metrics_from_values
+from utils.evaluacion import print_from_pipeline_result
 
 
 def transformer_pipeline(
@@ -35,7 +36,7 @@ def transformer_pipeline(
     nhead: int = 4,
     num_layers: int = 2,
     **selector_params,
-) -> Tuple[float, float, float, float, float]:
+) -> dict:
     """
     Pipeline para entrenar y evaluar un clasificador basado en Transformer sobre SAHeart,
     usando la estructura modularizada.
@@ -172,7 +173,7 @@ def transformer_pipeline(
     X_train, X_test, y_train, y_test = split_data(X_scaled, y)
 
     # 7) Entrenamiento + evaluación
-    accuracy, precision, recall, f1, auc = transformer_train(
+    metrics = transformer_train(
         X_train,
         y_train,
         X_test,
@@ -185,19 +186,17 @@ def transformer_pipeline(
         num_layers=num_layers,
     )
 
- # 8) Reporte
+    # 8) Reporte
     elapsed = round(time.time() - t0, 4)
-    print_metrics_from_values(
-        accuracy,
-        precision,
-        recall,
-        f1,
-        auc,
-        selector_name=selector_name,
-        selected_columns=list(X_sel.columns),
-        mask=mask_for_report,
-        fitness=fitness_for_report,
-        elapsed_seconds=elapsed,      
-    )
-
-    return accuracy, precision, recall, f1, auc
+    result = {
+        "model": "transformer",
+        "selector": selector_name,
+        "metrics": metrics,
+        "selected_features": list(X_sel.columns),
+        "mask": mask_for_report,
+        "selector_fitness": fitness_for_report,
+        "elapsed_seconds": elapsed,
+        "extra_info": {"tiempo_s": elapsed},
+    }
+    print_from_pipeline_result(result)
+    return result
