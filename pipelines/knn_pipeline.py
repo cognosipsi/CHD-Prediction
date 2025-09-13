@@ -20,7 +20,7 @@ from predictores.knn import knn_train, knn_evaluator
 
 # Utilidades de evaluación
 from utils.evaluacion import print_metrics_from_values
-
+from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 # Estimador para fitness de WOA (usaremos KNN para coherencia con el pipeline)
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -138,7 +138,7 @@ def knn_pipeline(
 
         elif sel in ("woa", "whale", "ballenas"):
             # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
-            n_neighbors = selector_params.get("n_neighbors", 5)
+            n_neighbors = selector_params.get("n_neighbors", 3)
             estimator = KNeighborsClassifier(n_neighbors=n_neighbors)
 
             # Pre-escalamos una copia para el fitness (no perdemos nombres de columnas para aplicar la máscara)
@@ -176,23 +176,21 @@ def knn_pipeline(
     X_train, X_test, y_train, y_test = split_data(X_scaled, y)
 
     # 6) Entrenamiento + evaluación del KNN final
-    accuracy, precision, recall, f1, auc = knn_train(
-        X_train, y_train, X_test, y_test
-    )
+    # Obtén las predicciones y probabilidades (ajusta knn_train si es necesario)
+    y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)  # Debe retornar y_pred, y_prob
+    metrics = compute_classification_metrics(y_test, y_pred, y_prob)
 
     # 7) Reporte centralizado
     elapsed = round(time.time() - t0, 4)
-    print_metrics_from_values(
-        accuracy,
-        precision,
-        recall,
-        f1,
-        auc,
-        selector_name=selector_name,
-        selected_columns=list(X_sel.columns),
-        mask=mask_for_report,
-        fitness=fitness_for_report,
-        extra_info={"tiempo_s": elapsed},
-    )
-
-    return accuracy, precision, recall, f1, auc
+    result = {
+        "model": "knn",
+        "selector": selector_name,
+        "metrics": metrics,
+        "selected_features": list(X_sel.columns),
+        "mask": mask_for_report,
+        "selector_fitness": fitness_for_report,
+        "elapsed_seconds": elapsed,
+        "extra_info": {"tiempo_s": elapsed},
+    }
+    print_from_pipeline_result(result)
+    return result

@@ -14,7 +14,7 @@ def _apply_mask(X: np.ndarray, mask: Optional[Sequence[int]]) -> np.ndarray:
 def knn_evaluator(X_train: np.ndarray, X_test: np.ndarray,
                   y_train: np.ndarray, y_test: np.ndarray,
                   mask: Optional[Sequence[int]] = None,
-                  n_neighbors: int = 5) -> float:
+                  n_neighbors: int = 3) -> Tuple[np.ndarray, np.ndarray]:
     """
     Devuelve accuracy de validación como fitness (mayor = mejor).
     """
@@ -23,7 +23,11 @@ def knn_evaluator(X_train: np.ndarray, X_test: np.ndarray,
     model = KNeighborsClassifier(n_neighbors=n_neighbors)
     model.fit(Xt, y_train)
     y_pred = model.predict(Xv)
-    return float(accuracy_score(y_test, y_pred))
+    try:
+        y_prob = model.predict_proba(Xv)[:, 1]
+    except Exception:
+        y_prob = None
+    return y_pred, y_prob
 
 def knn_train(X_train: np.ndarray, y_train: np.ndarray,
               X_test: np.ndarray, y_test: np.ndarray,
