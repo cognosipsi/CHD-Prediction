@@ -36,6 +36,7 @@ def mlp_pipeline(
     random_state: int = 42,
     early_stopping: bool = False,     # = mlpWOA.py
     tol: float = 1e-4,
+    use_smote: bool = True,
     **selector_params,
 ) -> dict:
     """
@@ -162,7 +163,9 @@ def mlp_pipeline(
 
     # 5) Split y escalado PARA EL MLP (igual que monolítico; sin fuga)
     #    Nota: fijamos test_size=0.2 para replicar mlpWOA.py
-    X_train, X_test, y_train, y_test = split_data(X_sel.values, y, test_size=0.2, random_state=random_state)
+    X_train, X_test, y_train, y_test = split_data(
+        X_sel.values, y, test_size=0.2, random_state=random_state, use_smote=use_smote
+    )
     X_train, X_test, _ = scale_train_test(X_train, X_test, scaler_type=scaler_type)
 
     # 6) Entrenar y evaluar MLP
