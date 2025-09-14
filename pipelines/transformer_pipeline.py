@@ -35,6 +35,7 @@ def transformer_pipeline(
     d_model: int = 64,
     nhead: int = 4,
     num_layers: int = 2,
+    use_smote: bool = True,
     **selector_params,
 ) -> dict:
     """
@@ -170,7 +171,9 @@ def transformer_pipeline(
 
     # 6) Escalado y split con las columnas finales
     X_scaled = scale_features(X_sel.values, scaler_type=scaler_type)
-    X_train, X_test, y_train, y_test = split_data(X_scaled, y)
+    X_train, X_test, y_train, y_test = split_data(
+        X_scaled, y, use_smote=use_smote  # <-- Pasa el parámetro aquí
+    )
 
     # 7) Entrenamiento + evaluación
     metrics = transformer_train(
