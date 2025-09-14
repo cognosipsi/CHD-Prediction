@@ -31,6 +31,7 @@ def knn_pipeline(
     encoding_method: str = "labelencoder",   # coherente con main.py
     scaler_type: str = "standard",             # coherente con main.py
     redundancy: Optional[str] = "none",  # <-- NUEVO
+    use_smote: bool = True,
     **selector_params,
 ) -> Tuple[float, float, float, float, float]:
     """
@@ -173,8 +174,10 @@ def knn_pipeline(
 
     # 5) Escalado final sobre columnas seleccionadas + split (lo que realmente usará el KNN final)
     X_scaled = scale_features(X_sel.values, scaler_type=scaler_type)
-    X_train, X_test, y_train, y_test = split_data(X_scaled, y)
-
+    X_train, X_test, y_train, y_test = split_data(
+        X_scaled, y, use_smote=use_smote  # <-- Pasa el parámetro aquí
+    )
+    
     # 6) Entrenamiento + evaluación del KNN final
     # Obtén las predicciones y probabilidades (ajusta knn_train si es necesario)
     y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)  # Debe retornar y_pred, y_prob
