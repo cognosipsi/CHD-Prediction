@@ -46,6 +46,7 @@ def xgb_pipeline(
     xgb_params: Optional[Dict[str, Any]] = None,
     test_size: float = 0.2,
     random_state: int = 42,
+    use_smote: bool = True, 
     **selector_params,
 ) -> Dict[str, Any]:
     """
@@ -86,7 +87,9 @@ def xgb_pipeline(
     X_scaled = scale_features(X_df.values, scaler_type=scaler_type)
 
     # 5) Split preliminar (algunas heurísticas lo usan; no afecta el flujo final)
-    X_train, X_test, y_train, y_test = split_data(X_scaled, y, test_size=test_size, random_state=random_state)
+    X_train, X_test, y_train, y_test = split_data(
+        X_scaled, y, test_size=test_size, random_state=random_state, use_smote=use_smote  # <-- Pasa el parámetro aquí
+    )
 
     # 6) Selección de características (opcional) sobre DataFrame (para preservar nombres)
     sel = (selector or 'none').lower()
@@ -182,7 +185,9 @@ def xgb_pipeline(
 
     # 7) Escalado y split sobre el subconjunto de columnas seleccionado (flujo final)
     X_scaled = scale_features(X_sel_df.values, scaler_type=scaler_type)
-    X_train, X_test, y_train, y_test = split_data(X_scaled, y, test_size=test_size, random_state=random_state)
+    X_train, X_test, y_train, y_test = split_data(
+        X_scaled, y, test_size=test_size, random_state=random_state, use_smote=use_smote  # <-- Pasa el parámetro aquí
+    )
 
     # 8) Entrena y evalúa XGB sobre las features seleccionadas
     params = xgb_params or {}
