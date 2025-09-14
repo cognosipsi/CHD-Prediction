@@ -149,11 +149,11 @@ if __name__ == "__main__":
     X = df.drop("chd", axis=1)
     y = df["chd"]
 
-    # Aplicar SMOTE para balancear el dataset
-    X_resampled, y_resampled = apply_smote(X, y)
+    # 1. Divide los datos primero
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
-    # Dividir los datos en entrenamiento y prueba
-    X_train, X_test, y_train, y_test = split_data(X_resampled, y_resampled)
+    # 2. Aplica SMOTE solo al conjunto de entrenamiento
+    X_train_resampled, y_train_resampled = apply_smote(X_train, y_train)
 
     # Ejecutar pipeline y mostrar resultado
     res = PIPELINES[modelo](
