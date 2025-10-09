@@ -20,9 +20,11 @@ from selectores.bsocv import bso_cv
 from selectores.woa import woa_feature_selection
 from selectores.eliminacionpearson import eliminar_redundancias
 
+#Optimizadores
+from optimizadores.gridSearchCV import run_grid_search
+
 # === Reporte (igual que MLP) ===
-from utils.evaluacion import print_metrics_from_values
-from utils.evaluacion import print_from_pipeline_result
+from utils.evaluacion import print_from_pipeline_result, compute_classification_metrics
 
 
 def _apply_mask_df(X_df: pd.DataFrame, mask: np.ndarray) -> pd.DataFrame:
@@ -46,7 +48,8 @@ def xgb_pipeline(
     xgb_params: Optional[Dict[str, Any]] = None,
     test_size: float = 0.2,
     random_state: int = 42,
-    use_smote: bool = True, 
+    use_smote: bool = True,
+    optimizer: Optional[str] = "none", 
     **selector_params,
 ) -> Dict[str, Any]:
     """
@@ -189,16 +192,42 @@ def xgb_pipeline(
         X_scaled, y, test_size=test_size, random_state=random_state, use_smote=use_smote  # <-- Pasa el parámetro aquí
     )
 
-    # 8) Entrena y evalúa XGB sobre las features seleccionadas
-    params = xgb_params or {}
-    metrics = fit_and_predict(
-        X_train, y_train,
-        X_test,  y_test,
-        params=params,
-    )
+    # 8) Entrena y evalúa XGB sobre las features seleccionadas (con optimizador opcional)
+    best_params = None
+
+    # Soporta dos estilos:
+    #  - optimizer como callable (opción B sugerida en main.py): optimizer("xgb", X_train, y_train, cv=5)
+    #  - optimizer como string (opción A): "gridsearchcv" o "run_grid_search"
+    gs = None
+    if callable(optimizer):
+        try:
+            gs = optimizer("xgb", X_train, y_train, cv=5)
+        except TypeError:
+            # por si tu callable no acepta cv como kwarg
+            gs = optimizer("xgb", X_train, y_train)
+    elif isinstance(optimizer, str) and optimizer.lower() in {"gridsearchcv", "run_grid_search"}:
+        gs = run_grid_search("xgb", X_train, y_train, cv=5)
+
+    if gs is not None:
+        # Usar el mejor estimador encontrado por GridSearchCV
+        best_xgb = gs["best_estimator"]
+        best_params = gs.get("best_params", None)
+
+        y_pred = best_xgb.predict(X_test)
+        y_prob = best_xgb.predict_proba(X_test)[:, 1] if hasattr(best_xgb, "predict_proba") else None
+        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+    else:
+        # Fallback: entrenamiento como lo tenías antes (sin optimización)
+        params = xgb_params or {}
+        metrics = fit_and_predict(
+            X_train, y_train,
+            X_test,  y_test,
+            params=params,
+        )
 
     # 9) Reporte (idéntico al estilo del MLP)
     selected_columns: List[str] = list(X_sel_df.columns)
+    opt_name = optimizer.__name__ if callable(optimizer) else optimizer
     elapsed = round(time.time() - t0, 4)
     result: Dict[str, Any] = {
         "model": "XGBClassifier",
@@ -207,7 +236,11 @@ def xgb_pipeline(
         "n_selected": len(selected_columns),
         "metrics": metrics,
         "elapsed_seconds": elapsed,
-        "extra_info": {"tiempo_s": elapsed},
+        "extra_info": {
+            "tiempo_s": elapsed,
+            "optimizer": opt_name,
+            "best_params": best_params,
+        },
     }
     if feature_mask is not None:
         result["mask"] = feature_mask.tolist()

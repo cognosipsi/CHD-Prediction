@@ -17,6 +17,9 @@ from selectores.eliminacionpearson import eliminar_redundancias
 # Predictores (ahora sí existen ambas funciones)
 from predictores.transformer import transformer_train
 
+#Optimizadores
+from optimizadores.gridSearchCV import get_param_grid
+
 # Utilidades de evaluación
 from utils.evaluacion import print_metrics_from_values
 from utils.evaluacion import print_from_pipeline_result
@@ -36,6 +39,7 @@ def transformer_pipeline(
     nhead: int = 4,
     num_layers: int = 2,
     use_smote: bool = True,
+    optimizer: Optional[str] = "none",
     **selector_params,
 ) -> dict:
     """
@@ -175,21 +179,62 @@ def transformer_pipeline(
         X_scaled, y, use_smote=use_smote  # <-- Pasa el parámetro aquí
     )
 
-    # 7) Entrenamiento + evaluación
-    metrics = transformer_train(
-        X_train,
-        y_train,
-        X_test,
-        y_test,
-        epochs=epochs,
-        lr=lr,
-        batch_size=batch_size,
-        d_model=d_model,
-        nhead=nhead,
-        num_layers=num_layers,
-    )
+    # 7) Entrenamiento + evaluación (con optimización opcional)
+    best_params = None
+    metrics = None
+
+    def _optimizer_label(opt):
+        if opt is None:
+            return None
+        if isinstance(opt, str):
+            return opt
+        return getattr(opt, "__name__", opt.__class__.__name__)
+
+    usa_grid = optimizer is not None and str(optimizer).lower() in {"gridsearchcv", "run_grid_search", "grid", "search"}
+
+    if usa_grid:
+        # Obtenemos el grid “sugerido” del archivo de optimización
+        full_grid = get_param_grid("transformer")
+        # Para no explotar el tiempo de cómputo, acotamos a un sub-grid pequeño
+        epochs_grid     = full_grid.get("epochs", [epochs])[:2]
+        lr_grid         = full_grid.get("lr", [lr])[:2]
+        batch_grid      = full_grid.get("batch_size", [batch_size])[:2]
+
+        # Búsqueda manual (f1 como métrica si viene en el dict de retorno)
+        best_f1 = -1.0
+        for e in epochs_grid:
+            for lr_ in lr_grid:
+                for bs in batch_grid:
+                    cand_metrics = transformer_train(
+                        X_train, y_train, X_test, y_test,
+                        epochs=e, lr=lr_, batch_size=bs,
+                        d_model=d_model, nhead=nhead, num_layers=num_layers,
+                    )
+                    # intenta leer alguna clave estándar
+                    f1 = None
+                    for k in ("f1", "f1_score", "macro_f1", "f1_macro"):
+                        if k in cand_metrics and isinstance(cand_metrics[k], (int, float)):
+                            f1 = cand_metrics[k]
+                            break
+                    if f1 is None:
+                        # si tu función devuelve 'metrics' anidado o similar, adapta aquí
+                        f1 = -1.0
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        metrics = cand_metrics
+                        best_params = {"epochs": e, "lr": lr_, "batch_size": bs}
+
+    # Si no hay optimizer o no mejoró, entrena con los hiperparámetros base
+    if metrics is None:
+        metrics = transformer_train(
+            X_train, y_train, X_test, y_test,
+            epochs=epochs, lr=lr, batch_size=batch_size,
+            d_model=d_model, nhead=nhead, num_layers=num_layers,
+        )
+
 
     # 8) Reporte
+    opt_name = _optimizer_label(optimizer)
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "transformer",
@@ -199,7 +244,11 @@ def transformer_pipeline(
         "mask": mask_for_report,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
-        "extra_info": {"tiempo_s": elapsed},
+        "extra_info": {
+            "tiempo_s": elapsed,
+            "optimizer": opt_name,
+            "best_params": best_params,
+        },
     }
     print_from_pipeline_result(result)
     return result

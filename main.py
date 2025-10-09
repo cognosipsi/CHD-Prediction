@@ -16,6 +16,9 @@ from selectores.bsocv import bso_cv
 from selectores.mabc import m_abc_feature_selection
 from selectores.woa import woa_feature_selection
 
+#Optimizadores
+from optimizadores.gridSearchCV import run_grid_search
+
 # --- Opciones disponibles ---
 PIPELINES = {
     "knn": knn_pipeline,
@@ -28,6 +31,11 @@ SELECTORS = {
     "bso-cv": bso_cv,
     "m-abc": m_abc_feature_selection,
     "woa": woa_feature_selection,
+    "none": None,
+}
+
+OPTIMIZERS = {
+    "gridsearchcv": run_grid_search,
     "none": None,
 }
 
@@ -120,6 +128,9 @@ if __name__ == "__main__":
     file_path = "SAHeart.csv"
 
     modelo = _prompt_choice(list(PIPELINES.keys()), "¿Qué modelo deseas evaluar?")
+    optimizer = _prompt_choice(list(OPTIMIZERS.keys()),
+                              "¿Qué modelo de optimización de parámetros deseas usar? "
+                              "(elige 'none' para no usar)", allow_empty=True, default="none")
     selector = _prompt_choice(list(SELECTORS.keys()),
                               "¿Qué método de selección usar? (elige 'none' para no usar)",
                               allow_empty=True, default="none")
@@ -162,6 +173,7 @@ if __name__ == "__main__":
         encoding_method=encoding_method,
         scaler_type=scaler_type,
         redundancy=None if redundancy == 'none' else redundancy,
+        optimizer=None if OPTIMIZERS.get(optimizer) in (None, "none") else "gridsearchcv",
         **(selector_params or {}),
     )
     _pretty_print_result(res)

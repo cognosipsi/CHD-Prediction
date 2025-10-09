@@ -1,4 +1,3 @@
-# pipelines/knn_pipeline.py
 from __future__ import annotations
 from typing import Tuple, Optional
 import numpy as np
@@ -19,10 +18,12 @@ from selectores.eliminacionpearson import eliminar_redundancias
 from predictores.knn import knn_train, knn_evaluator
 
 # Utilidades de evaluación
-from utils.evaluacion import print_metrics_from_values
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 # Estimador para fitness de WOA (usaremos KNN para coherencia con el pipeline)
 from sklearn.neighbors import KNeighborsClassifier
+
+#Optimizadores
+from optimizadores.gridSearchCV import run_grid_search
 
 def knn_pipeline(
     file_path: str,
@@ -32,6 +33,7 @@ def knn_pipeline(
     scaler_type: str = "standard",             # coherente con main.py
     redundancy: Optional[str] = "none",  # <-- NUEVO
     use_smote: bool = True,
+    optimizer: Optional[str] = "none",
     **selector_params,
 ) -> Tuple[float, float, float, float, float]:
     """
@@ -178,12 +180,26 @@ def knn_pipeline(
         X_scaled, y, use_smote=use_smote  # <-- Pasa el parámetro aquí
     )
     
-    # 6) Entrenamiento + evaluación del KNN final
-    # Obtén las predicciones y probabilidades (ajusta knn_train si es necesario)
-    y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)  # Debe retornar y_pred, y_prob
-    metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+    # 6) Entrenamiento + evaluación KNN
+    if optimizer and optimizer.lower() == "gridsearchcv":
+        gs = run_grid_search("knn", X_train, y_train, cv=5)
+        if gs is not None:
+            best_knn = gs["best_estimator"]
+            y_pred = best_knn.predict(X_test)
+            y_prob = best_knn.predict_proba(X_test)[:, 1] if hasattr(best_knn, "predict_proba") else None
+            metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+            best_params = gs["best_params"]
+        else:
+            y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)
+            metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+            best_params = None
+    else:
+        y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)
+        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+        best_params = None
 
     # 7) Reporte centralizado
+    opt_name = optimizer.__name__ if callable(optimizer) else optimizer
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "knn",
@@ -193,7 +209,11 @@ def knn_pipeline(
         "mask": mask_for_report,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
-        "extra_info": {"tiempo_s": elapsed},
+        "extra_info": {
+            "tiempo_s": elapsed,
+            "optimizer": opt_name,
+            "best_params": best_params,
+        },
     }
     print_from_pipeline_result(result)
     return result

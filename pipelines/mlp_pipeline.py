@@ -18,8 +18,10 @@ from selectores.eliminacionpearson import eliminar_redundancias
 # Predictor
 from predictores.mlp import mlp_train
 
+#Optimizadores
+from optimizadores.gridSearchCV import run_grid_search
+
 # Reporte
-from utils.evaluacion import print_metrics_from_values
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
 def mlp_pipeline(
@@ -37,6 +39,7 @@ def mlp_pipeline(
     early_stopping: bool = False,     # = mlpWOA.py
     tol: float = 1e-4,
     use_smote: bool = True,
+    optimizer: Optional[str] = "none",
     **selector_params,
 ) -> dict:
     """
@@ -168,21 +171,53 @@ def mlp_pipeline(
     )
     X_train, X_test, _ = scale_train_test(X_train, X_test, scaler_type=scaler_type)
 
-    # 6) Entrenar y evaluar MLP
-    y_pred, y_proba, y_test_real = mlp_train(
-        X_train, y_train, X_test, y_test,
-        hidden_layer_sizes=hidden_layer_sizes,
-        activation=activation,
-        solver=solver,
-        max_iter=max_iter,
-        random_state=random_state,
-        early_stopping=early_stopping,
-        tol=tol,
-    )
+    # 6) Entrenamiento + (opcional) optimización del MLP
+    best_params = None
 
-    metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
+    # Acepta "gridsearchcv" o "run_grid_search" como etiqueta
+    usa_gs = optimizer is not None and str(optimizer).lower() in {"gridsearchcv", "run_grid_search"}
+
+    if usa_gs:
+        # Ejecuta GridSearchCV con el estimador sklearn MLPClassifier
+        gs = run_grid_search("mlp", X_train, y_train, cv=5)
+        if gs is not None:
+            best_mlp = gs["best_estimator"]
+            best_params = gs["best_params"]
+
+            # Predicción y métricas con el mejor modelo
+            y_pred = best_mlp.predict(X_test)
+            y_proba = best_mlp.predict_proba(X_test)[:, 1] if hasattr(best_mlp, "predict_proba") else None
+            metrics = compute_classification_metrics(y_test, y_pred, y_proba)
+        else:
+            # Fallback a tu entrenamiento "normal" si el grid no se pudo realizar
+            y_pred, y_proba, y_test_real = mlp_train(
+                X_train, y_train, X_test, y_test,
+                hidden_layer_sizes=hidden_layer_sizes,
+                activation=activation,
+                solver=solver,
+                max_iter=max_iter,
+                random_state=random_state,
+                early_stopping=early_stopping,
+                tol=tol,
+            )
+            metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
+    else:
+        # Entrenamiento "normal" (sin optimización)
+        y_pred, y_proba, y_test_real = mlp_train(
+            X_train, y_train, X_test, y_test,
+            hidden_layer_sizes=hidden_layer_sizes,
+            activation=activation,
+            solver=solver,
+            max_iter=max_iter,
+            random_state=random_state,
+            early_stopping=early_stopping,
+            tol=tol,
+        )
+        metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
+
 
     # 7) Reporte
+    opt_name = optimizer.__name__ if callable(optimizer) else optimizer
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "mlp",
@@ -192,7 +227,11 @@ def mlp_pipeline(
         "mask": mask_for_report,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
-        "extra_info": {"tiempo_s": elapsed},
+        "extra_info": {
+            "tiempo_s": elapsed,
+            "optimizer": opt_name,
+            "best_params": best_params,
+        },
     }
     print_from_pipeline_result(result)
     return result
