@@ -16,7 +16,7 @@ from predictores.xgb import fit_and_predict
 
 # === Selectores ===
 from selectores.mabc import m_abc_feature_selection
-from selectores.bsocv import bso_cv
+from selectores.bsocv import BSOFeatureSelector
 from selectores.woa import woa_feature_selection
 from selectores.eliminacionpearson import eliminar_redundancias
 
@@ -147,7 +147,6 @@ def xgb_pipeline(
         X_for_fs = scale_features(X_df.values, scaler_type=scaler_type)
 
         mask, woa_fit = woa_feature_selection(
-            X_for_fs, y,
             population_size=population_size,
             max_iter=max_iter,
             estimator=selector_params.get("estimator", None),
@@ -169,8 +168,7 @@ def xgb_pipeline(
         penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
         verbose         = bool(selector_params.get("verbose", False))
 
-        mask, bso_fit = bso_cv(
-            X_df, df["chd"],
+        selector_est = BSOFeatureSelector(
             population_size=population_size,
             max_iter=max_iter,
             cv=cv,
@@ -178,10 +176,12 @@ def xgb_pipeline(
             penalty_weight=penalty_weight,
             verbose=verbose,
         )
-        feature_mask = np.asarray(mask).astype(int)
-        fitness_for_report = float(bso_fit)
+        selector_est.fit(X_df, df["chd"])
+        X_sel_df = selector_est.transform(X_df)
+
+        feature_mask = selector_est.get_support().astype(int)
+        fitness_for_report = float(selector_est.fitness_)
         selector_name = f"BSO-CV(pop={population_size}, iters={max_iter}, cv={cv})"
-        X_sel_df = _apply_mask_df(X_df, feature_mask)
 
     else:
         raise ValueError(f"Selector desconocido: {selector}")

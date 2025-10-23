@@ -10,7 +10,7 @@ from preprocesamiento.escalado import scale_features, scale_train_test
 from preprocesamiento.division_dataset import split_data
 
 # Selectores
-from selectores.bsocv import bso_cv
+from selectores.bsocv import BSOFeatureSelector
 from selectores.mabc import m_abc_feature_selection
 from selectores.woa import woa_feature_selection
 from selectores.eliminacionpearson import eliminar_redundancias
@@ -85,8 +85,7 @@ def mlp_pipeline(
             penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
             verbose         = bool(selector_params.get("verbose", False))
 
-            best_mask, best_fitness = bso_cv(
-                X_df, df["chd"],
+            selector_est = BSOFeatureSelector(
                 population_size=population_size,
                 max_iter=max_iter_s,
                 cv=cv,
@@ -94,11 +93,11 @@ def mlp_pipeline(
                 penalty_weight=penalty_weight,
                 verbose=verbose,
             )
-            selected_idx = [i for i, b in enumerate(best_mask) if b == 1]
-            X_sel = X_df.iloc[:, selected_idx] if selected_idx else X_df
+            selector_est.fit(X_df, df["chd"])
+            X_sel = selector_est.transform(X_df)
             selector_name = f"BSO-CV (pop={population_size}, iters={max_iter_s}, cv={cv})"
-            mask_for_report = list(map(int, best_mask))
-            fitness_for_report = float(best_fitness)
+            mask_for_report = selector_est.get_support().astype(int).tolist()
+            fitness_for_report = float(selector_est.fitness_)
 
         elif sel in ("m-abc", "mabc", "m_abc"):
             # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
