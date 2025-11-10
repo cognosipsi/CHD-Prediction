@@ -105,7 +105,7 @@ def mlp_pipeline(
             X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_scaled_all, y)
 
             pop_size     = int(selector_params.get("pop_size", 20))
-            max_cycles   = int(selector_params.get("max_cycles", selector_params.get("max_iter", 30)))
+            max_iter   = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
             limit        = int(selector_params.get("limit", 5))
             patience     = int(selector_params.get("patience", 10))
             random_state_s = selector_params.get("random_state", 42)
@@ -117,7 +117,7 @@ def mlp_pipeline(
                 X_train_s, X_test_s, y_train_s, y_test_s,
                 use_custom_evaluator=False,     # KNN CV interno (rápido)
                 pop_size=pop_size,
-                max_cycles=max_cycles,
+                max_iter=max_iter,
                 limit=limit,
                 patience=patience,
                 random_state=random_state_s,
@@ -128,7 +128,7 @@ def mlp_pipeline(
 
             idx = np.where(best_mask == 1)[0]
             X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"M-ABC (pop={pop_size}, cycles={max_cycles}, cv={cv_folds})"
+            selector_name = f"M-ABC (pop={pop_size}, cycles={max_iter}, cv={cv_folds})"
             mask_for_report = list(map(int, best_mask))
             fitness_for_report = float(best_fitness)
 

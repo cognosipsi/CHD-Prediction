@@ -55,7 +55,7 @@ def xgb_pipeline(
     """
     Pipeline de XGBoost + selección de características.
     - selector: 'none' | 'm-abc' | 'mabc' | 'woa' | 'bso-cv' | 'bsocv'
-    - selector_params: hiperparámetros del selector (pop_size, max_cycles, etc.).
+    - selector_params: hiperparámetros del selector (pop_size, max_iter, etc.).
     """
     t0 = time.time()
 
@@ -110,7 +110,7 @@ def xgb_pipeline(
         X_train, X_test, y_train, y_test = split_data(X_scaled, y, test_size=test_size, random_state=random_state)
 
         pop_size     = selector_params.get("pop_size", 20)
-        max_cycles   = selector_params.get("max_cycles", selector_params.get("max_iter", 30))
+        max_iter   = selector_params.get("max_iter", selector_params.get("max_iter", 30))
         limit        = selector_params.get("limit", 5)
         patience     = selector_params.get("patience", 10)
         cv_folds     = selector_params.get("cv_folds", 5)
@@ -122,7 +122,7 @@ def xgb_pipeline(
             X_train, X_test, y_train, y_test,
             use_custom_evaluator=False,
             pop_size=pop_size,
-            max_cycles=max_cycles,
+            max_iter=max_iter,
             limit=limit,
             patience=patience,
             random_state=rs,
@@ -132,7 +132,7 @@ def xgb_pipeline(
         )
         feature_mask = np.asarray(best_mask).astype(int)
         fitness_for_report = float(best_fitness)
-        selector_name = f"M-ABC(pop={pop_size}, cycles={max_cycles}, cv={cv_folds})"
+        selector_name = f"M-ABC(pop={pop_size}, cycles={max_iter}, cv={cv_folds})"
         X_sel_df = _apply_mask_df(X_df, feature_mask)
 
     elif sel in {'woa', 'whale', 'ballenas'}:

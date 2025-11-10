@@ -114,7 +114,7 @@ def transformer_pipeline(
 
             # Defaults tipo "script monolítico": 20x30 + CV=5
             pop_size     = selector_params.get("pop_size", 20)
-            max_cycles   = selector_params.get("max_cycles", selector_params.get("max_iter", 30))
+            max_iter   = selector_params.get("max_iter", selector_params.get("max_iter", 30))
             limit        = selector_params.get("limit", 5)
             patience     = selector_params.get("patience", 10)
             random_state = selector_params.get("random_state", 42)
@@ -126,7 +126,7 @@ def transformer_pipeline(
                 X_train, X_test, y_train, y_test,
                 use_custom_evaluator=False,
                 pop_size=pop_size,
-                max_cycles=max_cycles,
+                max_iter=max_iter,
                 limit=limit,
                 patience=patience,
                 random_state=random_state,
@@ -137,7 +137,7 @@ def transformer_pipeline(
 
             idx = np.where(best_mask == 1)[0]
             X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"M-ABC (pop={pop_size}, cycles={max_cycles}, cv={cv_folds})"
+            selector_name = f"M-ABC (pop={pop_size}, cycles={max_iter}, cv={cv_folds})"
             mask_for_report = list(map(int, best_mask))
             fitness_for_report = best_fitness
             

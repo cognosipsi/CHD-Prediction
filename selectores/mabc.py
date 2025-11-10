@@ -37,7 +37,7 @@ class MABCFeatureSelector(BaseEstimator, TransformerMixin):
         La métrica usada es *accuracy* (para mantener la lógica del original).
     population_size : int, default=20
         Tamaño de la población/colonia (empleadas = observadoras = `population_size`).
-    max_cycles : int, default=30
+    max_iter : int, default=30
         Número máximo de ciclos del algoritmo ABC.
     limit : int, default=5
         Umbral de `trial` para convertir una solución en *scout* (reinicializar).
@@ -75,7 +75,7 @@ class MABCFeatureSelector(BaseEstimator, TransformerMixin):
         knn_k: int = 5,
         estimator=None,
         population_size: int = 20,
-        max_cycles: int = 30,
+        max_iter: int = 30,
         limit: int = 5,
         patience: int = 10,
         cv_folds: Optional[int] = 5,
@@ -87,7 +87,7 @@ class MABCFeatureSelector(BaseEstimator, TransformerMixin):
         self.knn_k = knn_k
         self.estimator = estimator
         self.population_size = population_size
-        self.max_cycles = max_cycles
+        self.max_iter = max_iter
         self.limit = limit
         self.patience = patience
         self.cv_folds = cv_folds
@@ -194,7 +194,7 @@ class MABCFeatureSelector(BaseEstimator, TransformerMixin):
         trial = np.zeros(self.population_size, dtype=int)
         no_improve = 0
 
-        for cycle in range(self.max_cycles):
+        for cycle in range(self.max_iter):
             # Empleadas: flip de 1 bit, aceptar si mejora
             for i in range(self.population_size):
                 cand = pop[i].copy()
@@ -249,7 +249,7 @@ class MABCFeatureSelector(BaseEstimator, TransformerMixin):
 
             if self.verbose:
                 print(
-                    f"[M-ABC] ciclo {cycle+1}/{self.max_cycles} | best={best_fit:.4f} | k={int(best_mask.sum())}"
+                    f"[M-ABC] ciclo {cycle+1}/{self.max_iter} | best={best_fit:.4f} | k={int(best_mask.sum())}"
                 )
 
             if self.patience is not None and no_improve >= self.patience:
@@ -298,7 +298,7 @@ def mabc_fs(
     knn_k: int = 5,
     estimator=None,
     population_size: int = 20,
-    max_cycles: int = 30,
+    max_iter: int = 30,
     limit: int = 5,
     patience: int = 10,
     cv_folds: Optional[int] = 5,
@@ -314,7 +314,7 @@ def mabc_fs(
         knn_k=knn_k,
         estimator=estimator,
         population_size=population_size,
-        max_cycles=max_cycles,
+        max_iter=max_iter,
         limit=limit,
         patience=patience,
         cv_folds=cv_folds,

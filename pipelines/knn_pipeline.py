@@ -7,7 +7,6 @@ from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
 from preprocesamiento.escalado import scale_features
 from preprocesamiento.division_dataset import split_data
-from preprocesamiento.smote import apply_smote  # Importamos SMOTE
 
 # Selectores ya modularizados
 from selectores.bsocv import BSOFeatureSelector
@@ -22,9 +21,11 @@ from predictores.knn import knn_evaluator
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
 #sklearn
-from sklearn.pipeline import Pipeline
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline as SkPipeline  
+from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.over_sampling import SMOTE
 
 #Optimizadores
 from optimizadores.gridSearchCV import run_grid_search
@@ -50,7 +51,7 @@ def knn_pipeline(
     selector: "bso-cv", "m-abc", "woa" o None (sin selección)
 
     Parámetros extra (selector_params) por selector:
-      - M-ABC: pop_size, max_iter, limit
+      - M-ABC: population_size, max_iter, limit
       - WOA: population_size, max_iter, cv, penalty_weight, random_state, n_neighbors
     """
     t0 = time.time()
@@ -75,20 +76,55 @@ def knn_pipeline(
     X_df = df.drop(columns=["chd"])
     y = df["chd"].values
 
-    # 3) Split
-    X_train, X_test, y_train, y_test = split_data(X_df, y, use_smote=False)
-
-    # 4) SMOTE solo en el train si se solicita
-    if use_smote:
-        X_train, y_train = apply_smote(X_train, y_train)
-
-    # 4) Selección de características (opcional)
-    X_sel = X_df
+    # 4) Si el selector es WOA (función no-transformer), aplicamos máscara **antes** del split
+    # (nota: para usar WOA dentro de CV haría falta envolverlo como Transformer).
+    sel = (selector or "none").strip().lower() if selector is not None else "none"
     selector_name = None
     mask_for_report = None
     fitness_for_report = None
+    
+    X_sel = X_df
+    y_sel = y
 
-    sel = (selector or "none").strip().lower() if selector is not None else "none"
+    if sel in ("woa", "whale", "ballenas"):
+        # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
+        n_neighbors = selector_params.get("n_neighbors", 3)
+        population_size = selector_params.get("population_size", 20)
+        max_iter = selector_params.get("max_iter", 50)
+        cv = selector_params.get("cv", 5)
+        penalty_weight = selector_params.get("penalty_weight", 0.01)
+        random_state = selector_params.get("random_state", None)
+
+        # Escalado dentro de la CV del fitness de WOA:
+        estimator_for_fitness = SkPipeline([
+            ("scaler", scale_features(scaler_type)),
+            ("knn", KNeighborsClassifier(n_neighbors=n_neighbors)),
+        ])
+
+        best_mask, best_fitness = woa_feature_selection(
+            X_df.values,               # ndarray escalado para fitness con KNN
+            y,
+            population_size=population_size,
+            max_iter=max_iter,
+            estimator=estimator_for_fitness,
+            cv=cv,
+            penalty_weight=penalty_weight,
+            random_state=random_state,
+        )
+        idx = np.where(best_mask == 1)[0]
+        if idx.size > 0:
+            X_sel = X_df.iloc[:, idx]
+        selector_name = f"WOA (pop={population_size}, iters={max_iter}, k={n_neighbors}), cv={cv})"
+        mask_for_report = list(map(int, best_mask.tolist()))
+        fitness_for_report = float(best_fitness)
+        # Para el pipeline final, no añadimos paso 'selector' (ya aplicamos la máscara)
+        sel = "none"
+
+    # 5) Split HOLD-OUT (sin SMOTE)
+    X_train, X_test, y_train, y_test = split_data(X_sel, y_sel, use_smote=False)
+
+    # 6) Construcción del Pipeline de imblearn
+    steps = []
 
     if sel in ("bso", "bso-cv", "bsocv"):
         population_size = int(selector_params.get("population_size", 20))
@@ -106,14 +142,10 @@ def knn_pipeline(
             penalty_weight=penalty_weight,
             verbose=verbose,
         )
-        selector_est.fit(X_df, df["chd"])
-        X_sel = selector_est.transform(X_df)
+        steps.append(("selector", selector_est))
         selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
-        mask_for_report = selector_est.get_support().astype(int).tolist()
-        fitness_for_report = float(selector_est.fitness_)
 
     elif sel in ("m-abc", "mabc", "m_abc"):
-
         population_size = int(selector_params.get("population_size", 20))
         max_iter        = int(selector_params.get("max_iter", 50))
         limit           = int(selector_params.get("limit", 5))
@@ -124,11 +156,10 @@ def knn_pipeline(
         verbose = int(bool(selector_params.get("verbose", False)))
 
         mabc = MABCFeatureSelector(
-            X_train, X_test, y_train, y_test,
             use_custom_evaluator=False,
             knn_k=knn_k,
             population_size=population_size,
-            max_cycles=max_iter,     # <- importante
+            max_iter=max_iter,     # <- importante
             limit=limit,
             patience=patience,
             cv_folds=cv_folds,
@@ -136,114 +167,32 @@ def knn_pipeline(
             verbose=verbose,
         )
 
-        scaler = scale_features(scaler_type)  # <- tu helper
-        clf = KNeighborsClassifier(n_neighbors=knn_k)
-
-        pipe = Pipeline([
-            ("mabc", mabc),
-            ("scaler", scaler),
-            ("clf", clf),
-        ])
-        # GridSearch opcional directamente sobre el pipeline
-        if optimizer and str(optimizer).lower() == "gridsearchcv":
-            param_grid = {
-                "mabc__population_size": [population_size],
-                "mabc__max_cycles": [max_iter],
-                "clf__n_neighbors": [3, 5, 7],
-            }
-            gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
-            gs.fit(X_train, y_train)
-            model = gs.best_estimator_
-            best_params = gs.best_params_
-        else:
-            model = pipe.fit(X_train, y_train)
-            best_params = None
-
-        # Reporte selección
-        msel = model.named_steps["mabc"]
-        mask_for_report = msel.get_support().astype(int).tolist()
-        fitness_for_report = getattr(msel, "best_fitness_", None)
+        steps.append(("selector", mabc))
         selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
-
-        # Evaluación
-        y_pred = model.predict(X_test)
-        y_prob = None
-        if hasattr(model.named_steps["clf"], "predict_proba"):
-            try:
-                y_prob = model.named_steps["clf"].predict_proba(X_test)[:, 1]
-            except Exception:
-                y_prob = None
-        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
-
-        # Reporte selección
-        msel = model.named_steps["mabc"]
-        mask_for_report = msel.get_support().astype(int).tolist()
-        fitness_for_report = getattr(msel, "best_fitness_", None)
-        selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
-
-        # Evaluación
-        y_pred = model.predict(X_test)
-        y_prob = None
-        if hasattr(model.named_steps["clf"], "predict_proba"):
-            try:
-                y_prob = model.named_steps["clf"].predict_proba(X_test)[:, 1]
-            except Exception:
-                y_prob = None
-        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
-
-    elif sel in ("woa", "whale", "ballenas"):
-        # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
-        n_neighbors = selector_params.get("n_neighbors", 3)
-        estimator = KNeighborsClassifier(n_neighbors=n_neighbors)
-
-        # Pre-escalamos una copia para el fitness (no perdemos nombres de columnas para aplicar la máscara)
-        X_for_fs = scale_features(X_df.values, scaler_type=scaler_type)
-
-        population_size = selector_params.get("population_size", 20)
-        max_iter = selector_params.get("max_iter", 50)
-        cv = selector_params.get("cv", 5)
-        penalty_weight = selector_params.get("penalty_weight", 0.01)
-        random_state = selector_params.get("random_state", None)
-
-        best_mask, best_fitness = woa_feature_selection(
-            X_sel.values,               # ndarray escalado para fitness con KNN
-            y,
-            population_size=population_size,
-            max_iter=max_iter,
-            estimator=estimator,
-            cv=cv,
-            penalty_weight=penalty_weight,
-            random_state=random_state,
-        )
-        idx = np.where(best_mask == 1)[0]
-        X_sel = X_sel.iloc[:, idx] if idx.size > 0 else X_sel
-        selector_name = f"WOA (pop={population_size}, iters={max_iter}, k={n_neighbors})"
-        mask_for_report = list(map(int, best_mask.tolist()))
-        fitness_for_report = float(best_fitness)
 
     elif sel in ("none", "sin", "no"):
-        selector_name = None
+        pass
     else:
         raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
 
-    # 5) Escalado final sobre columnas seleccionadas + split (lo que realmente usará el KNN final)
-    # Re-split tras selección (sin SMOTE aquí)
-    X_train, X_test, y_train, y_test = split_data(X_sel, y, use_smote=False)
-
-    # SMOTE solo en el train si se solicita
+    # Paso SMOTE (opcional, DENTRO del pipeline)
     if use_smote:
-        X_train, y_train = apply_smote(X_train, y_train)
+        steps.append(("smote", SMOTE(random_state=42)))
 
-    # Escalado con tu helper get_scaler (fit en train, transform en test)
+    # Scaler + Clasificador
     scaler = scale_features(scaler_type)
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled  = scaler.transform(X_test)
-    
-    # GridSearch en-pipeline (afina KNN y podría afinar M-ABC si amplías param_grid)
+    steps.append(("scaler", scaler))
+    steps.append(("clf", KNeighborsClassifier()))
+
+    pipe = ImbPipeline(steps)
+
+    # 7) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
+    best_params = None
     if optimizer and str(optimizer).lower() == "gridsearchcv":
+        # Grid genérico para cualquier selector envuelto como "selector"
         param_grid = {
-            "mabc__population_size": [population_size],
-            "mabc__max_cycles": [max_iter],
+            "selector__population_size": [selector_params.get("population_size", 20)],
+            "selector__max_iter": [selector_params.get("max_iter", 50)],
             "clf__n_neighbors": [3, 5, 7],
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
@@ -252,10 +201,32 @@ def knn_pipeline(
         best_params = gs.best_params_
     else:
         model = pipe.fit(X_train, y_train)
-        best_params = None
 
-    # 7) Reporte centralizado
-    opt_name = optimizer.__name__ if callable(optimizer) else optimizer
+    # 8) Reporte de selección (si procede)
+
+    #    - Si el paso 'selector' existe, intentamos recuperar la máscara/fitness.
+    #    - Si usamos WOA como función previa, ya los tenemos en mask_for_report/fitness_for_report.
+    if any(name == "selector" for name, _ in pipe.steps):
+        sel_step = model.named_steps.get("selector")
+        if hasattr(sel_step, "get_support"):
+            try:
+                mask_for_report = sel_step.get_support().astype(int).tolist()
+            except Exception:
+                mask_for_report = None
+        fitness_for_report = getattr(sel_step, "fitness_", getattr(sel_step, "best_fitness_", fitness_for_report))
+
+    # 9) Evaluación en test
+    y_pred = model.predict(X_test)
+    y_prob = None
+    clf_step = model.named_steps.get("clf")
+    if hasattr(clf_step, "predict_proba"):
+        try:
+            y_prob = clf_step.predict_proba(X_test)[:, 1]
+        except Exception:
+            y_prob = None
+    metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+
+    # 10) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "knn",
@@ -268,8 +239,7 @@ def knn_pipeline(
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
         "extra_info": {
-            "tiempo_s": elapsed,
-            "optimizer": opt_name,
+            "optimizer": (optimizer if isinstance(optimizer, str) else getattr(optimizer, "__name__", str(optimizer))),
             "best_params": best_params,
         },
     }
