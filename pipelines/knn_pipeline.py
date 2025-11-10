@@ -7,20 +7,30 @@ from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
 from preprocesamiento.escalado import scale_features
 from preprocesamiento.division_dataset import split_data
+from preprocesamiento.smote import apply_smote  # Importamos SMOTE
 
 # Selectores ya modularizados
 from selectores.bsocv import BSOFeatureSelector
-from selectores.mabc import m_abc_feature_selection
+from selectores.mabc import MABCFeatureSelector
 from selectores.woa import woa_feature_selection
 from selectores.eliminacionpearson import eliminar_redundancias
 
+# Preprocesamiento (desde tus módulos)
+from preprocesamiento.lectura_datos import load_data          # carga CSV
+from preprocesamiento.codificacion import encode_features     # codifica 'famhist'
+from preprocesamiento.division_dataset import split_data      # split + SMOTE opcional
+from preprocesamiento.escalado import get_scaler              # NUEVO: helper para instanciar scaler
+
 # Predictores KNN (funciones en predictores/knn.py)
-from predictores.knn import knn_train, knn_evaluator
+from predictores.knn import knn_evaluator
 
 # Utilidades de evaluación
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
-# Estimador para fitness de WOA (usaremos KNN para coherencia con el pipeline)
+
+#sklearn
+from sklearn.pipeline import Pipeline
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import GridSearchCV
 
 #Optimizadores
 from optimizadores.gridSearchCV import run_grid_search
@@ -61,11 +71,6 @@ def knn_pipeline(
     # 2) Codificar (SAHeart: 'famhist' categórica). Usa lo que venga desde main.py
     df = encode_features(df, encoding_method=encoding_method)
 
-    # Limpiezas opcionales (compatibles con otros pipelines)
-    drop_cols = [c for c in ["row.names", "obesity"] if c in df.columns]
-    if drop_cols:
-        df = df.drop(columns=drop_cols)
-
     # 2.2) Eliminación de redundancias (opcional)
     if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
         df = eliminar_redundancias(df, metodo=redundancy)
@@ -76,125 +81,183 @@ def knn_pipeline(
     X_df = df.drop(columns=["chd"])
     y = df["chd"].values
 
+    # 3) Split
+    X_train, X_test, y_train, y_test = split_data(X_df, y, use_smote=False)
+
+    # 4) SMOTE solo en el train si se solicita
+    if use_smote:
+        X_train, y_train = apply_smote(X_train, y_train)
+
     # 4) Selección de características (opcional)
     X_sel = X_df
     selector_name = None
     mask_for_report = None
     fitness_for_report = None
 
-    if selector is not None:
-        sel = selector.strip().lower()
+    sel = (selector or "none").strip().lower() if selector is not None else "none"
 
-        if sel in ("bso", "bso-cv", "bsocv"):
-            population_size = int(selector_params.get("population_size", 20))
-            max_iter        = int(selector_params.get("max_iter", 50))
-            cv              = int(selector_params.get("cv", 5))
-            random_state_b  = selector_params.get("random_state", None)
-            penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
-            verbose         = bool(selector_params.get("verbose", False))
+    if sel in ("bso", "bso-cv", "bsocv"):
+        population_size = int(selector_params.get("population_size", 20))
+        max_iter        = int(selector_params.get("max_iter", 50))
+        cv              = int(selector_params.get("cv", 5))
+        random_state_b  = selector_params.get("random_state", None)
+        penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
+        verbose         = bool(selector_params.get("verbose", False))
 
-            selector_est = BSOFeatureSelector(
-                population_size=population_size,
-                max_iter=max_iter,
-                cv=cv,
-                random_state=random_state_b,
-                penalty_weight=penalty_weight,
-                verbose=verbose,
-            )
-            selector_est.fit(X_df, df["chd"])
-            X_sel = selector_est.transform(X_df)
-            selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
-            mask_for_report = selector_est.get_support().astype(int).tolist()
-            fitness_for_report = float(selector_est.fitness_)
+        selector_est = BSOFeatureSelector(
+            population_size=population_size,
+            max_iter=max_iter,
+            cv=cv,
+            random_state=random_state_b,
+            penalty_weight=penalty_weight,
+            verbose=verbose,
+        )
+        selector_est.fit(X_df, df["chd"])
+        X_sel = selector_est.transform(X_df)
+        selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
+        mask_for_report = selector_est.get_support().astype(int).tolist()
+        fitness_for_report = float(selector_est.fitness_)
 
-        elif sel in ("m-abc", "mabc", "m_abc"):
-            X_all_scaled = scale_features(X_df.values, scaler_type=scaler_type)
-            X_train, X_test, y_train, y_test = split_data(X_all_scaled, y)
+    elif sel in ("m-abc", "mabc", "m_abc"):
 
-            pop_size     = selector_params.get("pop_size", 20)
-            max_cycles   = selector_params.get("max_cycles", selector_params.get("max_iter", 30))
-            limit        = selector_params.get("limit", 5)
-            patience     = selector_params.get("patience", 10)
-            random_state = selector_params.get("random_state", 42)
-            cv_folds     = selector_params.get("cv_folds", 5)
-            knn_k        = selector_params.get("knn_k", 5)
+        population_size = int(selector_params.get("population_size", 20))
+        max_iter        = int(selector_params.get("max_iter", 50))
+        limit           = int(selector_params.get("limit", 5))
+        patience        = int(selector_params.get("patience", 10))
+        random_state = selector_params.get("random_state", 42)
+        cv_folds     = selector_params.get("cv_folds", 5)
+        knn_k           = int(selector_params.get("knn_k", 5))
+        verbose = int(bool(selector_params.get("verbose", False)))
 
-            best_mask, best_fitness = m_abc_feature_selection(
-                X_train, X_test, y_train, y_test,
-                use_custom_evaluator=False,   # KNN CV interno (coherente con KNN final)
-                pop_size=pop_size,
-                max_cycles=max_cycles,
-                limit=limit,
-                patience=patience,
-                random_state=random_state,
-                cv_folds=cv_folds,
-                knn_k=knn_k,
-                verbose=selector_params.get("verbose", False),
-            )
+        mabc = MABCFeatureSelector(
+            X_train, X_test, y_train, y_test,
+            use_custom_evaluator=False,
+            knn_k=knn_k,
+            population_size=population_size,
+            max_cycles=max_iter,     # <- importante
+            limit=limit,
+            patience=patience,
+            cv_folds=cv_folds,
+            random_state=random_state,
+            verbose=verbose,
+        )
 
-            idx = np.where(best_mask == 1)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"M-ABC (pop={pop_size}, cycles={max_cycles}, cv={cv_folds})"
-            mask_for_report = list(map(int, best_mask))
-            fitness_for_report = float(best_fitness)
+        scaler = get_scaler(scaler_type)  # <- tu helper
+        clf = KNeighborsClassifier(n_neighbors=knn_k)
 
-        elif sel in ("woa", "whale", "ballenas"):
-            # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
-            n_neighbors = selector_params.get("n_neighbors", 3)
-            estimator = KNeighborsClassifier(n_neighbors=n_neighbors)
-
-            # Pre-escalamos una copia para el fitness (no perdemos nombres de columnas para aplicar la máscara)
-            X_for_fs = scale_features(X_df.values, scaler_type=scaler_type)
-
-            population_size = selector_params.get("population_size", 20)
-            max_iter = selector_params.get("max_iter", 50)
-            cv = selector_params.get("cv", 5)
-            penalty_weight = selector_params.get("penalty_weight", 0.01)
-            random_state = selector_params.get("random_state", None)
-
-            best_mask, best_fitness = woa_feature_selection(
-                X_for_fs,               # ndarray escalado para fitness con KNN
-                y,
-                population_size=population_size,
-                max_iter=max_iter,
-                estimator=estimator,
-                cv=cv,
-                penalty_weight=penalty_weight,
-                random_state=random_state,
-            )
-            idx = np.where(best_mask == 1)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"WOA (pop={population_size}, iters={max_iter}, k={n_neighbors})"
-            mask_for_report = list(map(int, best_mask.tolist()))
-            fitness_for_report = float(best_fitness)
-
-        elif sel in ("none", "sin", "no"):
-            selector_name = None
+        pipe = Pipeline([
+            ("mabc", mabc),
+            ("scaler", scaler),
+            ("clf", clf),
+        ])
+        # GridSearch opcional directamente sobre el pipeline
+        if optimizer and str(optimizer).lower() == "gridsearchcv":
+            param_grid = {
+                "mabc__population_size": [population_size],
+                "mabc__max_cycles": [max_iter],
+                "clf__n_neighbors": [3, 5, 7],
+            }
+            gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+            gs.fit(X_train, y_train)
+            model = gs.best_estimator_
+            best_params = gs.best_params_
         else:
-            raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
+            model = pipe.fit(X_train, y_train)
+            best_params = None
+
+        # Reporte selección
+        msel = model.named_steps["mabc"]
+        mask_for_report = msel.get_support().astype(int).tolist()
+        fitness_for_report = getattr(msel, "best_fitness_", None)
+        selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
+
+        # Evaluación
+        y_pred = model.predict(X_test)
+        y_prob = None
+        if hasattr(model.named_steps["clf"], "predict_proba"):
+            try:
+                y_prob = model.named_steps["clf"].predict_proba(X_test)[:, 1]
+            except Exception:
+                y_prob = None
+        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+
+        # Reporte selección
+        msel = model.named_steps["mabc"]
+        mask_for_report = msel.get_support().astype(int).tolist()
+        fitness_for_report = getattr(msel, "best_fitness_", None)
+        selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
+
+        # Evaluación
+        y_pred = model.predict(X_test)
+        y_prob = None
+        if hasattr(model.named_steps["clf"], "predict_proba"):
+            try:
+                y_prob = model.named_steps["clf"].predict_proba(X_test)[:, 1]
+            except Exception:
+                y_prob = None
+        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+
+    elif sel in ("woa", "whale", "ballenas"):
+        # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
+        n_neighbors = selector_params.get("n_neighbors", 3)
+        estimator = KNeighborsClassifier(n_neighbors=n_neighbors)
+
+        # Pre-escalamos una copia para el fitness (no perdemos nombres de columnas para aplicar la máscara)
+        X_for_fs = scale_features(X_df.values, scaler_type=scaler_type)
+
+        population_size = selector_params.get("population_size", 20)
+        max_iter = selector_params.get("max_iter", 50)
+        cv = selector_params.get("cv", 5)
+        penalty_weight = selector_params.get("penalty_weight", 0.01)
+        random_state = selector_params.get("random_state", None)
+
+        best_mask, best_fitness = woa_feature_selection(
+            X_sel.values,               # ndarray escalado para fitness con KNN
+            y,
+            population_size=population_size,
+            max_iter=max_iter,
+            estimator=estimator,
+            cv=cv,
+            penalty_weight=penalty_weight,
+            random_state=random_state,
+        )
+        idx = np.where(best_mask == 1)[0]
+        X_sel = X_sel.iloc[:, idx] if idx.size > 0 else X_sel
+        selector_name = f"WOA (pop={population_size}, iters={max_iter}, k={n_neighbors})"
+        mask_for_report = list(map(int, best_mask.tolist()))
+        fitness_for_report = float(best_fitness)
+
+    elif sel in ("none", "sin", "no"):
+        selector_name = None
+    else:
+        raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
 
     # 5) Escalado final sobre columnas seleccionadas + split (lo que realmente usará el KNN final)
-    X_scaled = scale_features(X_sel.values, scaler_type=scaler_type)
-    X_train, X_test, y_train, y_test = split_data(
-        X_scaled, y, use_smote=use_smote  # <-- Pasa el parámetro aquí
-    )
+    # Re-split tras selección (sin SMOTE aquí)
+    X_train, X_test, y_train, y_test = split_data(X_sel, y, use_smote=False)
+
+    # SMOTE solo en el train si se solicita
+    if use_smote:
+        X_train, y_train = apply_smote(X_train, y_train)
+
+    # Escalado con tu helper get_scaler (fit en train, transform en test)
+    scaler = get_scaler(scaler_type)
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled  = scaler.transform(X_test)
     
-    # 6) Entrenamiento + evaluación KNN
-    if optimizer and optimizer.lower() == "gridsearchcv":
-        gs = run_grid_search("knn", X_train, y_train, cv=5)
-        if gs is not None:
-            best_knn = gs["best_estimator"]
-            y_pred = best_knn.predict(X_test)
-            y_prob = best_knn.predict_proba(X_test)[:, 1] if hasattr(best_knn, "predict_proba") else None
-            metrics = compute_classification_metrics(y_test, y_pred, y_prob)
-            best_params = gs["best_params"]
-        else:
-            y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)
-            metrics = compute_classification_metrics(y_test, y_pred, y_prob)
-            best_params = None
+    # GridSearch en-pipeline (afina KNN y podría afinar M-ABC si amplías param_grid)
+    if optimizer and str(optimizer).lower() == "gridsearchcv":
+        param_grid = {
+            "mabc__population_size": [population_size],
+            "mabc__max_cycles": [max_iter],
+            "clf__n_neighbors": [3, 5, 7],
+        }
+        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+        gs.fit(X_train, y_train)
+        model = gs.best_estimator_
+        best_params = gs.best_params_
     else:
-        y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test)
-        metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+        model = pipe.fit(X_train, y_train)
         best_params = None
 
     # 7) Reporte centralizado
@@ -204,7 +267,9 @@ def knn_pipeline(
         "model": "knn",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_sel.columns),
+        "selected_features": (
+            list(X_df.columns[np.array(mask_for_report, dtype=bool)]) if mask_for_report is not None else list(X_df.columns)
+        ),
         "mask": mask_for_report,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,

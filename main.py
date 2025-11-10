@@ -28,9 +28,9 @@ PIPELINES = {
 }
 
 SELECTORS = {
-    "bso-cv": bso_cv,
-    "m-abc": m_abc_feature_selection,
-    "woa": woa_feature_selection,
+    "bso-cv": "bso_cv",
+    "m-abc": "m-abc",
+    "woa": "woa",
     "none": None,
 }
 
@@ -63,8 +63,8 @@ def _build_selector_params(selector: str) -> dict:
     selector = (selector or "none").lower()
     if selector in {"m-abc", "mabc", "m_abc"}:
         return {
-            "pop_size": 20,
-            "max_cycles": 30,  # alias de max_iter
+            "population_size": 20,
+            "max_iter": 50,  # alias de max_iter
             "limit": 5,
             "patience": 10,
             "cv_folds": 5,
@@ -143,7 +143,6 @@ if __name__ == "__main__":
 
     # Normalizamos posibles alias de scaler
     scaler_type = _normalize_scaler_name(scaler_type)
-
     selector_params = _build_selector_params(selector)
 
     print(f"\nEjecutando pipeline: {modelo.upper()} | selector={selector} | "
