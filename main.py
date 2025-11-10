@@ -4,18 +4,6 @@ from pipelines.mlp_pipeline import mlp_pipeline
 from pipelines.xgb_pipeline import xgb_pipeline
 from pipelines.transformer_pipeline import transformer_pipeline
 
-# Preprocesamiento (utilidades disponibles si las necesitas)
-from preprocesamiento.lectura_datos import load_data
-from preprocesamiento.codificacion import encode_features
-from preprocesamiento.escalado import scale_features
-from preprocesamiento.division_dataset import split_data
-from preprocesamiento.smote import apply_smote  # Importamos SMOTE
-
-# Selectores (para construir parámetros por defecto)
-from selectores.bsocv import bso_cv
-from selectores.mabc import m_abc_feature_selection
-from selectores.woa import woa_feature_selection
-
 #Optimizadores
 from optimizadores.gridSearchCV import run_grid_search
 
@@ -148,22 +136,6 @@ if __name__ == "__main__":
     print(f"\nEjecutando pipeline: {modelo.upper()} | selector={selector} | "
           f"encoding={encoding_method} | scaler={scaler_type} | redundancy={redundancy} | archivo={file_path}",
           flush=True)
-
-    # Cargar los datos
-    df = load_data(file_path)
-
-    # Codificar características
-    df = encode_features(df, encoding_method)
-
-    # Separar las características y etiquetas
-    X = df.drop("chd", axis=1)
-    y = df["chd"]
-
-    # 1. Divide los datos primero
-    X_train, X_test, y_train, y_test = split_data(X, y)
-
-    # 2. Aplica SMOTE solo al conjunto de entrenamiento
-    X_train_resampled, y_train_resampled = apply_smote(X_train, y_train)
 
     # Ejecutar pipeline y mostrar resultado
     res = PIPELINES[modelo](

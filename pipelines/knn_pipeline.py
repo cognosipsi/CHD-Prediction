@@ -13,13 +13,7 @@ from preprocesamiento.smote import apply_smote  # Importamos SMOTE
 from selectores.bsocv import BSOFeatureSelector
 from selectores.mabc import MABCFeatureSelector
 from selectores.woa import woa_feature_selection
-from selectores.eliminacionpearson import eliminar_redundancias
-
-# Preprocesamiento (desde tus módulos)
-from preprocesamiento.lectura_datos import load_data          # carga CSV
-from preprocesamiento.codificacion import encode_features     # codifica 'famhist'
-from preprocesamiento.division_dataset import split_data      # split + SMOTE opcional
-from preprocesamiento.escalado import get_scaler              # NUEVO: helper para instanciar scaler
+from selectores.eliminacionpearson import eliminar_redundancias         # NUEVO: helper para instanciar scaler
 
 # Predictores KNN (funciones en predictores/knn.py)
 from predictores.knn import knn_evaluator
@@ -142,7 +136,7 @@ def knn_pipeline(
             verbose=verbose,
         )
 
-        scaler = get_scaler(scaler_type)  # <- tu helper
+        scaler = scale_features(scaler_type)  # <- tu helper
         clf = KNeighborsClassifier(n_neighbors=knn_k)
 
         pipe = Pipeline([
@@ -241,7 +235,7 @@ def knn_pipeline(
         X_train, y_train = apply_smote(X_train, y_train)
 
     # Escalado con tu helper get_scaler (fit en train, transform en test)
-    scaler = get_scaler(scaler_type)
+    scaler = scale_features(scaler_type)
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled  = scaler.transform(X_test)
     

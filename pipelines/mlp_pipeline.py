@@ -6,7 +6,7 @@ import numpy as np
 
 from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
-from preprocesamiento.escalado import scale_features, scale_train_test
+from preprocesamiento.escalado import scale_features
 from preprocesamiento.division_dataset import split_data
 
 # Selectores
@@ -168,7 +168,10 @@ def mlp_pipeline(
     X_train, X_test, y_train, y_test = split_data(
         X_sel.values, y, test_size=0.2, random_state=random_state, use_smote=use_smote
     )
-    X_train, X_test, _ = scale_train_test(X_train, X_test, scaler_type=scaler_type)
+    
+    scaler = scale_features(scaler_type)
+    X_train = scaler.fit_transform(X_train)
+    X_test  = scaler.transform(X_test)
 
     # 6) Entrenamiento + (opcional) optimización del MLP
     best_params = None
