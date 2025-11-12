@@ -12,7 +12,7 @@ from preprocesamiento.division_dataset import split_data
 from selectores.bsocv import BSOFeatureSelector
 from selectores.mabc import MABCFeatureSelector
 from selectores.woa import WOAFeatureSelector   
-from selectores.eliminacionpearson import eliminar_redundancias         # NUEVO: helper para instanciar scaler
+from selectores.eliminacionpearson import PearsonRedundancyEliminator     
 
 # Predictores KNN (funciones en predictores/knn.py)
 from predictores.knn import knn_evaluator
@@ -20,7 +20,7 @@ from predictores.knn import knn_evaluator
 # Utilidades de evaluación
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
-#sklearn
+#sklearn & imblearn
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline as SkPipeline  
@@ -40,7 +40,7 @@ def knn_pipeline(
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
     **selector_params,
-) -> Tuple[float, float, float, float, float]:
+):
     """
     Pipeline KNN modular:
       - preprocesamiento/*: carga, codificación, escalado, split
@@ -66,10 +66,6 @@ def knn_pipeline(
     # 2) Codificar (SAHeart: 'famhist' categórica). Usa lo que venga desde main.py
     df = encode_features(df, encoding_method=encoding_method)
 
-    # 2.2) Eliminación de redundancias (opcional)
-    if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
-        df = eliminar_redundancias(df, metodo=redundancy)
-
     # 3) Definir X, y
     if "chd" not in df.columns:
         raise ValueError("La columna objetivo 'chd' no se encuentra en el dataset.")
@@ -79,14 +75,17 @@ def knn_pipeline(
     # 4) Hold-out split (sin SMOTE aquí)
     X_train, X_test, y_train, y_test = split_data(X_df, y, use_smote=False)
 
+    # 6) Construcción del Pipeline de imblearn
+    steps = []
+
+    # 2.2) Eliminación de redundancias (opcional)
+    if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
+        steps.append(("redundancy", PearsonRedundancyEliminator(metodo=redundancy)))
+
     # 4) Si el selector es WOA (función no-transformer), aplicamos máscara **antes** del split
     # (nota: para usar WOA dentro de CV haría falta envolverlo como Transformer).
     sel = (selector or "none").strip().lower() if selector is not None else "none"
-    steps = []
     selector_name = None
-
-    # 6) Construcción del Pipeline de imblearn
-    steps = []
 
     if sel in ("bso", "bso-cv", "bsocv"):
         population_size = int(selector_params.get("population_size", 20))
@@ -118,7 +117,6 @@ def knn_pipeline(
         verbose = int(bool(selector_params.get("verbose", False)))
 
         mabc = MABCFeatureSelector(
-            use_custom_evaluator=False,
             knn_k=knn_k,
             population_size=population_size,
             max_iter=max_iter,     # <- importante
