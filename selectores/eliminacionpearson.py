@@ -1,6 +1,7 @@
-# selectores/eliminacionpearson.py
+# eliminacionpearson.py
 from __future__ import annotations
-from typing import Optional, Sequence, Union, List
+from typing import Optional, Sequence, Union
+import warnings
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -9,153 +10,113 @@ from sklearn.utils.validation import check_is_fitted
 
 class PearsonRedundancyEliminator(BaseEstimator, TransformerMixin):
     """
-    Eliminador simple de redundancias basado en una decisión fija (p. ej., mapa de Pearson).
-    Mantiene la lógica original: si metodo="pearson", elimina las columnas indicadas en
-    `columnas_objetivo` (por nombre o posición). Si metodo=None/"none"/"sin"/"no", no hace nada.
+    Transformer sklearn que elimina únicamente la columna 'obesity' si existe.
 
-    Parámetros
-    ----------
-    metodo : {"pearson", "pearson_obesity", "mapa_pearson", "none", None}, opcional (por defecto "pearson")
-        Método a aplicar. "pearson" aplica la lista fija de columnas a remover.
-        "none"/None (o sin/no) ⇒ no elimina columnas.
-    columnas_objetivo : Sequence[Union[str, int]], opcional (por defecto ("obesity",))
-        Columnas a eliminar cuando metodo="pearson". Pueden ser nombres (para DataFrame)
-        o posiciones enteras (para ndarray).
-    strict : bool, opcional (por defecto False)
-        Si True, un metodo desconocido produce ValueError; si False, actúa como no-op.
+    - Si X es un pandas.DataFrame: eliminará la columna 'obesity' (si está presente).
+    - Si X es un numpy.ndarray u otra estructura sin nombres: no elimina nada.
 
-    Notas
-    -----
-    - Si X es DataFrame, prioriza eliminar por NOMBRE de columna.
-    - Si X es ndarray y `columnas_objetivo` contiene enteros, elimina por ÍNDICE.
-    - Si X es ndarray y `columnas_objetivo` contiene nombres (strings), no elimina nada
-      (los nombres no existen en un ndarray) para mantener un comportamiento seguro.
+    Compatibilidad:
+    ---------------
+    Se mantiene la firma de __init__(metodo, columnas_objetivo, strict) para
+    compatibilidad con código previo, pero estos parámetros se IGNORAN.
+    El comportamiento es fijo: solo se elimina 'obesity' cuando exista.
     """
 
     def __init__(
         self,
         metodo: Optional[str] = "pearson",
-        columnas_objetivo: Sequence[Union[str, int]] = ("obesity",),
+        columnas_objetivo: Optional[Sequence[Union[str, int]]] = None,
         strict: bool = False,
     ):
+        # Se guardan por compatibilidad con get_params/set_params de sklearn,
+        # pero se ignoran en la lógica.
         self.metodo = metodo
-        self.columnas_objetivo = tuple(columnas_objetivo)
+        self.columnas_objetivo = columnas_objetivo
         self.strict = strict
 
-    # ------------------------- API sklearn -------------------------
-
     def fit(self, X, y=None):
-        metodo = None if self.metodo is None else str(self.metodo).lower().strip()
-        self._metodo_ = metodo
-
+        # Detectar tipo de entrada y guardar metadatos esperados por sklearn
         self.is_dataframe_ = isinstance(X, pd.DataFrame)
         if self.is_dataframe_:
-            self.feature_names_in_ = np.asarray(list(X.columns), dtype=object)
+            self.feature_names_in_ = list(X.columns)
+            self.n_features_in_ = X.shape[1]
+            self.has_obesity_ = "obesity" in X.columns
         else:
-            X_arr = np.asarray(X)
-            if X_arr.ndim != 2:
-                raise ValueError("X debe ser 2D (n_samples, n_features).")
-            # Nombres sintéticos para cumplir la API (no se usan para eliminar por nombre)
-            self.feature_names_in_ = np.asarray([f"x{i}" for i in range(X_arr.shape[1])], dtype=object)
+            X = np.asarray(X)
+            if X.ndim != 2:
+                raise ValueError("X debe ser 2D (n_muestras, n_features).")
+            self.feature_names_in_ = None
+            self.n_features_in_ = X.shape[1]
+            # Sin nombres de columnas, no podemos identificar 'obesity'
+            self.has_obesity_ = False
 
-        # Por defecto: no eliminar nada
-        self.cols_to_drop_idx_ = []   # índices a eliminar
-        self.cols_to_drop_names_ = [] # nombres a eliminar (cuando X es DataFrame)
-
-        # Ramas de comportamiento
-        if metodo is None or metodo in {"none", "sin", "no"}:
-            return self
-
-        if metodo in {"pearson", "pearson_obesity", "mapa_pearson"}:
-            # Resolver a índices y nombres según corresponda
-            idx_to_drop: List[int] = []
-            names_to_drop: List[str] = []
-
-            # Si es DF: intentar por nombre; si es ndarray: intentar por índice si son enteros
-            if self.is_dataframe_:
-                present = set(self.feature_names_in_.tolist())
-                for c in self.columnas_objetivo:
-                    if isinstance(c, str) and c in present:
-                        names_to_drop.append(c)
-                    elif isinstance(c, int) and 0 <= c < len(self.feature_names_in_):
-                        idx_to_drop.append(c)
-                # Completar idx a partir de nombres
-                if names_to_drop:
-                    name_set = set(names_to_drop)
-                    idx_to_drop.extend(i for i, n in enumerate(self.feature_names_in_) if n in name_set)
-            else:
-                # ndarray: sólo índices enteros tienen efecto
-                for c in self.columnas_objetivo:
-                    if isinstance(c, int) and 0 <= c < len(self.feature_names_in_):
-                        idx_to_drop.append(c)
-
-            # Guardar únicos y ordenados
-            self.cols_to_drop_idx_ = sorted(set(idx_to_drop))
-            self.cols_to_drop_names_ = [self.feature_names_in_[i] for i in self.cols_to_drop_idx_]
-            return self
-
-        # Método desconocido
-        if self.strict:
-            raise ValueError(
-                f"Método de eliminación de redundancias desconocido: {self.metodo}. "
-                "Usa 'pearson' o 'none'."
+        # Mensajes de compatibilidad si el usuario intenta configurar columnas/método
+        if self.columnas_objetivo not in (None, (), [], ("obesity",)):
+            warnings.warn(
+                "PearsonRedundancyEliminator ahora siempre elimina solo 'obesity'. "
+                "Los parámetros 'columnas_objetivo' y 'metodo' se ignoran.",
+                RuntimeWarning,
+                stacklevel=2,
             )
-        # Si no es estricto, actúa como no-op
+        if self.metodo not in (None, "pearson", "pearson_obesity", "mapa_pearson", "none", "sin", "no"):
+            warnings.warn(
+                "El parámetro 'metodo' se ignora. El transformador elimina únicamente 'obesity'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return self
 
     def transform(self, X):
-        check_is_fitted(self, ["feature_names_in_", "cols_to_drop_idx_", "cols_to_drop_names_", "_metodo_"])
-
-        # No-op según metodo
-        if self._metodo_ is None or self._metodo_ in {"none", "sin", "no"}:
+        check_is_fitted(self, ["is_dataframe_", "has_obesity_", "n_features_in_"])
+        if self.is_dataframe_:
+            X_df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X, columns=self.feature_names_in_)
+            if self.has_obesity_ and "obesity" in X_df.columns:
+                return X_df.drop(columns=["obesity"], errors="ignore")
+            return X_df
+        else:
+            X = np.asarray(X)
+            if X.ndim != 2:
+                raise ValueError("X debe ser 2D (n_muestras, n_features).")
+            # En ndarray no hay nombres, no se elimina nada
             return X
-
-        if isinstance(X, pd.DataFrame):
-            if self.cols_to_drop_names_:
-                cols_presentes = [c for c in self.cols_to_drop_names_ if c in X.columns]
-                if cols_presentes:
-                    return X.drop(columns=cols_presentes)
-            # Si no hay nombres presentes pero sí índices válidos, intentamos por posición
-            if self.cols_to_drop_idx_:
-                keep_idx = [i for i in range(X.shape[1]) if i not in set(self.cols_to_drop_idx_)]
-                return X.iloc[:, keep_idx]
-            return X
-
-        # ndarray
-        X_arr = np.asarray(X)
-        if X_arr.ndim != 2:
-            raise ValueError("X debe ser 2D (n_samples, n_features).")
-
-        if self.cols_to_drop_idx_:
-            mask = np.ones(X_arr.shape[1], dtype=bool)
-            mask[self.cols_to_drop_idx_] = False
-            return X_arr[:, mask]
-
-        return X_arr
 
     def get_feature_names_out(self, input_features=None):
-        """Devuelve los nombres de características tras la eliminación."""
+        """
+        Devuelve los nombres de características tras la transformación.
+
+        - Si se ajustó con DataFrame: devuelve los nombres originales menos 'obesity'.
+        - Si se ajustó con ndarray: devuelve input_features (o None) sin cambios.
+        """
+        if self.is_dataframe_ and self.feature_names_in_ is not None:
+            return np.array([c for c in self.feature_names_in_ if c != "obesity"], dtype=object)
         if input_features is None:
-            input_features = self.feature_names_in_
-        names = np.asarray(input_features, dtype=object)
+            return input_features
+        # Si el pipeline provee nombres, retiramos 'obesity' de allí también
+        return np.array([c for c in input_features if c != "obesity"], dtype=object)
 
-        if self.cols_to_drop_idx_:
-            keep_idx = [i for i in range(len(names)) if i not in set(self.cols_to_drop_idx_)]
-            return names[keep_idx]
-
-        return names
-
-
-# ----------------- Compatibilidad hacia atrás (función original) -----------------
 
 def eliminar_redundancias(
-    df: pd.DataFrame,
+    df: Union[pd.DataFrame, np.ndarray],
     metodo: Optional[str] = "pearson",
     columnas_objetivo: Sequence[Union[str, int]] = ("obesity",),
-) -> pd.DataFrame:
+):
     """
-    Conserva la API histórica devolviendo un DataFrame transformado.
-    Equivale a ajustar y transformar con PearsonRedundancyEliminator.
+    Función de conveniencia para compatibilidad histórica.
+
+    Ignora los parámetros y elimina únicamente la columna 'obesity' cuando
+    'df' es un DataFrame. Si 'df' es ndarray, devuelve 'df' sin cambios.
     """
-    tr = PearsonRedundancyEliminator(metodo=metodo, columnas_objetivo=columnas_objetivo)
-    return tr.fit_transform(df)
+    if metodo not in (None, "pearson", "pearson_obesity", "mapa_pearson", "none", "sin", "no"):
+        warnings.warn(
+            "El parámetro 'metodo' se ignora. Solo se elimina 'obesity' cuando existe.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if columnas_objetivo != ("obesity",):
+        warnings.warn(
+            "El parámetro 'columnas_objetivo' se ignora. Solo se elimina 'obesity'.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    transformer = PearsonRedundancyEliminator()
+    return transformer.fit(df).transform(df)
