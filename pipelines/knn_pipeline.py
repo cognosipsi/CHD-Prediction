@@ -181,7 +181,9 @@ def knn_pipeline(
         param_grid = {
             "selector__population_size": [selector_params.get("population_size", 20)],
             "selector__max_iter": [selector_params.get("max_iter", 50)],
-            "clf__n_neighbors": [3, 5, 7],
+            "clf__n_neighbors": [3, 5, 7, 10, 17],
+            "clf__weights": ["uniform", "distance"],  
+            "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
         gs.fit(X_train, y_train)
