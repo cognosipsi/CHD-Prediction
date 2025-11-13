@@ -39,6 +39,7 @@ def knn_pipeline(
     redundancy: Optional[str] = "none",  # <-- NUEVO
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
+    n_neighbors: int = 3, 
     **selector_params,
 ):
     """
@@ -168,7 +169,7 @@ def knn_pipeline(
     # Scaler + Clasificador
     scaler = scale_features(scaler_type)
     steps.append(("scaler", scaler))
-    steps.append(("clf", KNeighborsClassifier()))
+    steps.append(("clf", KNeighborsClassifier(n_neighbors=n_neighbors)))
 
     pipe = ImbPipeline(steps)
 
@@ -189,45 +190,27 @@ def knn_pipeline(
     else:
         model = pipe.fit(X_train, y_train)
 
-    # 8) Reporte de selección (si procede)
-
-    #    - Si el paso 'selector' existe, intentamos recuperar la máscara/fitness.
-    #    - Si usamos WOA como función previa, ya los tenemos en mask_for_report/fitness_for_report.
-    if any(name == "selector" for name, _ in model.steps):
-        sel_step = model.named_steps.get("selector")
-        if hasattr(sel_step, "get_support"):
-            try:
-                mask_for_report = sel_step.get_support().astype(int).tolist()
-            except Exception:
-                pass
-        if mask_for_report is None and hasattr(sel_step, "best_mask_"):
-            try:
-                mask_for_report = np.asarray(sel_step.best_mask_, dtype=int).tolist()
-            except Exception:
-                pass
-        fitness_for_report = getattr(sel_step, "fitness_", getattr(sel_step, "best_score_", None))
-
     # 9) Evaluación en test
-    y_pred = model.predict(X_test)
-    y_prob = None
-    clf_step = model.named_steps.get("clf")
-    if hasattr(clf_step, "predict_proba"):
-        try:
-            y_prob = clf_step.predict_proba(X_test)[:, 1]
-        except Exception:
-            y_prob = None
+    y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test, n_neighbors=n_neighbors)
     metrics = compute_classification_metrics(y_test, y_pred, y_prob)
 
     # 10) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
+
+    # Recuperamos el fitness del selector si está disponible
+    fitness_for_report = None
+    if any(name == "selector" for name, _ in model.steps):
+        sel_step = model.named_steps.get("selector")
+        if hasattr(sel_step, "fitness_"):
+            fitness_for_report = getattr(sel_step, "fitness_", None)
+        elif hasattr(sel_step, "best_score_"):
+            fitness_for_report = getattr(sel_step, "best_score_", None)
+
     result = {
         "model": "knn",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": (
-            list(X_df.columns[np.array(mask_for_report, dtype=bool)]) if mask_for_report is not None else list(X_df.columns)
-        ),
-        "mask": mask_for_report,
+        "selected_features": list(X_df.columns),  # Aquí sería la lista de todas las características
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
         "extra_info": {
