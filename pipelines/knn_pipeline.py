@@ -27,9 +27,6 @@ from sklearn.pipeline import Pipeline as SkPipeline
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 
-#Optimizadores
-from optimizadores.gridSearchCV import run_grid_search
-
 def knn_pipeline(
     file_path: str,
     selector: Optional[str] = "bso-cv",
