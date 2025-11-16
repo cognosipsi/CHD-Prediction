@@ -93,30 +93,3 @@ class PearsonRedundancyEliminator(BaseEstimator, TransformerMixin):
             return input_features
         # Si el pipeline provee nombres, retiramos 'obesity' de allí también
         return np.array([c for c in input_features if c != "obesity"], dtype=object)
-
-
-def eliminar_redundancias(
-    df: Union[pd.DataFrame, np.ndarray],
-    metodo: Optional[str] = "pearson",
-    columnas_objetivo: Sequence[Union[str, int]] = ("obesity",),
-):
-    """
-    Función de conveniencia para compatibilidad histórica.
-
-    Ignora los parámetros y elimina únicamente la columna 'obesity' cuando
-    'df' es un DataFrame. Si 'df' es ndarray, devuelve 'df' sin cambios.
-    """
-    if metodo not in (None, "pearson", "pearson_obesity", "mapa_pearson", "none", "sin", "no"):
-        warnings.warn(
-            "El parámetro 'metodo' se ignora. Solo se elimina 'obesity' cuando existe.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    if columnas_objetivo != ("obesity",):
-        warnings.warn(
-            "El parámetro 'columnas_objetivo' se ignora. Solo se elimina 'obesity'.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    transformer = PearsonRedundancyEliminator()
-    return transformer.fit(df).transform(df)

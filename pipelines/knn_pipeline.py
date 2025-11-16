@@ -71,7 +71,7 @@ def knn_pipeline(
     y = df["chd"].values
 
     # 4) Hold-out split (sin SMOTE aquí)
-    X_train, X_test, y_train, y_test = split_data(X_df, y, use_smote=False)
+    X_train, X_test, y_train, y_test = split_data(X_df.values, y, test_size=0.3, random_state=random_state)
 
     # 6) Construcción del Pipeline de imblearn
     steps = []

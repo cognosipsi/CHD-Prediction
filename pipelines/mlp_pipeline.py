@@ -1,6 +1,6 @@
 # pipelines/mlp_pipeline.py
 from __future__ import annotations
-from typing import Tuple, Optional
+from typing import Optional
 import time
 import numpy as np
 
@@ -11,18 +11,23 @@ from preprocesamiento.division_dataset import split_data
 
 # Selectores
 from selectores.bsocv import BSOFeatureSelector
-from selectores.mabc import m_abc_feature_selection
-from selectores.woa import woa_feature_selection
-from selectores.eliminacionpearson import eliminar_redundancias
+from selectores.mabc import MABCFeatureSelector
+from selectores.woa import WOAFeatureSelector
+from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
 # Predictor
-from predictores.mlp import mlp_train
-
-#Optimizadores
-from optimizadores.gridSearchCV import run_grid_search
+from predictores.mlp import mlp_evaluator
 
 # Reporte
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
+
+#sklearn & imblearn
+from sklearn.model_selection import GridSearchCV
+from sklearn.neural_network import MLPClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
 
 def mlp_pipeline(
     file_path: str = "SAHeart.csv",
@@ -34,7 +39,7 @@ def mlp_pipeline(
     hidden_layer_sizes=(100,),
     activation: str = "relu",
     solver: str = "adam",
-    max_iter: int = 500,              # = mlpWOA.py
+    max_iter: int = 1000,              # = mlpWOA.py
     random_state: int = 42,
     early_stopping: bool = False,     # = mlpWOA.py
     tol: float = 1e-4,
@@ -59,179 +64,147 @@ def mlp_pipeline(
 
     # 2) Redundancias (opcional)
     if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
-        df = eliminar_redundancias(df, metodo=redundancy)
+        df = PearsonRedundancyEliminator().fit_transform(df)
 
     # 3) X, y
     if "chd" not in df.columns:
         raise ValueError("La columna objetivo 'chd' no se encuentra en el dataset.")
     X_df = df.drop(columns=["chd"])
     y = df["chd"].values
+    feature_names = list(X_df.columns)
+
+    # 4) Hold-out split (sin SMOTE aquí)
+    X_train, X_test, y_train, y_test = split_data(X_df.values, y, test_size=0.3, random_state=random_state)
+
+    # 6) Construcción del Pipeline de imblearn
+    steps = []
 
     # 4) Selección de características (opcional) — incluye BSO-CV, M-ABC y WOA
-    X_sel = X_df
+    sel = (selector or "none").strip().lower() if selector is not None else "none"
     selector_name = None
-    mask_for_report = None
-    fitness_for_report = None
 
-    if selector is not None and str(selector).lower() not in {"none", "sin", "no"}:
-        sel = selector.strip().lower()
+    if sel in ("bso", "bso-cv", "bsocv"):
+        # Igual que antes: no requiere escalado global
+        population_size = int(selector_params.get("population_size", 20))
+        max_iter        = int(selector_params.get("max_iter", 50))
+        cv              = int(selector_params.get("cv", 5))
+        random_state_b  = selector_params.get("random_state", None)
+        penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
+        verbose         = bool(selector_params.get("verbose", False))
 
-        if sel in ("bso", "bso-cv", "bsocv"):
-            # Igual que antes: no requiere escalado global
-            population_size = int(selector_params.get("population_size", 20))
-            max_iter_s      = int(selector_params.get("max_iter", 50))
-            cv              = int(selector_params.get("cv", 5))
-            random_state_b  = selector_params.get("random_state", None)
-            penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
-            verbose         = bool(selector_params.get("verbose", False))
-
-            selector_est = BSOFeatureSelector(
-                population_size=population_size,
-                max_iter=max_iter_s,
-                cv=cv,
-                random_state=random_state_b,
-                penalty_weight=penalty_weight,
-                verbose=verbose,
-            )
-            selector_est.fit(X_df, df["chd"])
-            X_sel = selector_est.transform(X_df)
-            selector_name = f"BSO-CV (pop={population_size}, iters={max_iter_s}, cv={cv})"
-            mask_for_report = selector_est.get_support().astype(int).tolist()
-            fitness_for_report = float(selector_est.fitness_)
-
-        elif sel in ("m-abc", "mabc", "m_abc"):
-            # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
-            X_scaled_all = scale_features(X_df.values, scaler_type=scaler_type)
-            X_train_s, X_test_s, y_train_s, y_test_s = split_data(X_scaled_all, y)
-
-            pop_size     = int(selector_params.get("pop_size", 20))
-            max_iter   = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
-            limit        = int(selector_params.get("limit", 5))
-            patience     = int(selector_params.get("patience", 10))
-            random_state_s = selector_params.get("random_state", 42)
-            cv_folds     = int(selector_params.get("cv_folds", 5))
-            knn_k        = int(selector_params.get("knn_k", 5))
-            verbose      = bool(selector_params.get("verbose", False))
-
-            best_mask, best_fitness = m_abc_feature_selection(
-                X_train_s, X_test_s, y_train_s, y_test_s,
-                use_custom_evaluator=False,     # KNN CV interno (rápido)
-                pop_size=pop_size,
-                max_iter=max_iter,
-                limit=limit,
-                patience=patience,
-                random_state=random_state_s,
-                cv_folds=cv_folds,
-                knn_k=knn_k,
-                verbose=verbose,
-            )
-
-            idx = np.where(best_mask == 1)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"M-ABC (pop={pop_size}, cycles={max_iter}, cv={cv_folds})"
-            mask_for_report = list(map(int, best_mask))
-            fitness_for_report = float(best_fitness)
-
-        elif sel in ("woa", "whale", "whale-optimization"):
-            # Igual que el monolítico: escala TODO X para el fitness
-            X_scaled_all = scale_features(X_df.values, scaler_type=scaler_type)
-
-            # Defaults emparejados al script original
-            woa_pop   = int(selector_params.get("population_size", 30))
-            woa_iters = int(selector_params.get("max_iter", 50))
-            woa_cv    = int(selector_params.get("cv", 5))
-            woa_pen   = float(selector_params.get("penalty_weight", 0.01))
-            woa_seed  = selector_params.get("random_state", random_state)
-
-            best_mask, best_fitness = woa_feature_selection(
-                X_scaled_all,
-                y,
-                population_size=woa_pop,
-                max_iter=woa_iters,
-                estimator=selector_params.get("estimator", None),
-                cv=woa_cv,
-                penalty_weight=woa_pen,
-                random_state=woa_seed,
-            )
-
-            idx = np.where(best_mask == 1)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"WOA (pop={woa_pop}, iters={woa_iters}, cv={woa_cv}, pen={woa_pen})"
-            mask_for_report = list(map(int, best_mask))
-            fitness_for_report = float(best_fitness)
-
-        else:
-            raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
-
-    # 5) Split y escalado PARA EL MLP (igual que monolítico; sin fuga)
-    #    Nota: fijamos test_size=0.2 para replicar mlpWOA.py
-    X_train, X_test, y_train, y_test = split_data(
-        X_sel.values, y, test_size=0.2, random_state=random_state, use_smote=use_smote
-    )
-    
-    scaler = scale_features(scaler_type)
-    X_train = scaler.fit_transform(X_train)
-    X_test  = scaler.transform(X_test)
-
-    # 6) Entrenamiento + (opcional) optimización del MLP
-    best_params = None
-
-    # Acepta "gridsearchcv" o "run_grid_search" como etiqueta
-    usa_gs = optimizer is not None and str(optimizer).lower() in {"gridsearchcv", "run_grid_search"}
-
-    if usa_gs:
-        # Ejecuta GridSearchCV con el estimador sklearn MLPClassifier
-        gs = run_grid_search("mlp", X_train, y_train, cv=5)
-        if gs is not None:
-            best_mlp = gs["best_estimator"]
-            best_params = gs["best_params"]
-
-            # Predicción y métricas con el mejor modelo
-            y_pred = best_mlp.predict(X_test)
-            y_proba = best_mlp.predict_proba(X_test)[:, 1] if hasattr(best_mlp, "predict_proba") else None
-            metrics = compute_classification_metrics(y_test, y_pred, y_proba)
-        else:
-            # Fallback a tu entrenamiento "normal" si el grid no se pudo realizar
-            y_pred, y_proba, y_test_real = mlp_train(
-                X_train, y_train, X_test, y_test,
-                hidden_layer_sizes=hidden_layer_sizes,
-                activation=activation,
-                solver=solver,
-                max_iter=max_iter,
-                random_state=random_state,
-                early_stopping=early_stopping,
-                tol=tol,
-            )
-            metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
-    else:
-        # Entrenamiento "normal" (sin optimización)
-        y_pred, y_proba, y_test_real = mlp_train(
-            X_train, y_train, X_test, y_test,
-            hidden_layer_sizes=hidden_layer_sizes,
-            activation=activation,
-            solver=solver,
+        selector_est = BSOFeatureSelector(
+            population_size=population_size,
             max_iter=max_iter,
-            random_state=random_state,
-            early_stopping=early_stopping,
-            tol=tol,
+            cv=cv,
+            random_state=random_state_b,
+            penalty_weight=penalty_weight,
+            verbose=verbose,
         )
-        metrics = compute_classification_metrics(y_test_real, y_pred, y_proba)
+        steps.append(("selector", selector_est))
+        selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
 
+    elif sel in ("m-abc", "mabc", "m_abc"):
+        # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
 
-    # 7) Reporte
-    opt_name = optimizer.__name__ if callable(optimizer) else optimizer
+        pop_size     = int(selector_params.get("pop_size", 20))
+        max_iter   = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
+        limit        = int(selector_params.get("limit", 5))
+        patience     = int(selector_params.get("patience", 10))
+        random_state_s = selector_params.get("random_state", 42)
+        cv_folds     = int(selector_params.get("cv_folds", 5))
+        knn_k        = int(selector_params.get("knn_k", 5))
+        verbose      = bool(selector_params.get("verbose", False))
+
+        mabc = MABCFeatureSelector(
+            knn_k=knn_k,
+            population_size=pop_size,
+            max_iter=max_iter,     # <- importante
+            limit=limit,
+            patience=patience,
+            cv_folds=cv_folds,
+            random_state=random_state_s,
+            verbose=verbose,
+        )
+        steps.append(("selector", mabc))
+        selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
+
+    elif sel in ("woa", "whale", "whale-optimization"):
+        # WOA: para coherencia con MLP, usamos KNN en el fitness + pre-escalado temporal
+        n_neighbors = int(selector_params.get("n_neighbors", 3))
+        population_size = int(selector_params.get("population_size", 20))
+        max_iter = int(selector_params.get("max_iter", 50))
+        cv = int(selector_params.get("cv", 5))
+        penalty_weight = float(selector_params.get("penalty_weight", 0.01))
+        random_state_w = selector_params.get("random_state", 42)
+
+        # Escalado dentro de la CV del fitness de WOA:
+        estimator_for_fitness = Pipeline([
+            ("scaler", scale_features(scaler_type)),
+            ("knn", KNeighborsClassifier(n_neighbors=n_neighbors)),
+        ])
+
+        woa = WOAFeatureSelector(
+            population_size=population_size,
+            max_iter=max_iter,
+            estimator=estimator_for_fitness,  # evita fuga: el escalado está dentro de la CV interna
+            cv=cv,
+            penalty_weight=penalty_weight,
+            random_state=random_state_w,
+        )
+        steps.append(("selector", woa))
+        selector_name = f"WOA (pop={population_size}, iters={max_iter}, cv={cv}, k={n_neighbors})"
+
+    elif sel in ("none", "sin", "no"):
+        pass
+    else:
+        raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
+
+    # Paso SMOTE (opcional, DENTRO del pipeline)
+    if use_smote:
+        steps.append(("smote", SMOTE(random_state=42)))
+        
+    # Scaler + Clasificador
+    scaler = scale_features(scaler_type)
+    steps.append(("scaler", scaler))
+    steps.append(("clf", MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, activation=activation, solver=solver, max_iter=max_iter, random_state=random_state)))
+
+    pipe = ImbPipeline(steps)
+
+    # 6) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
+    best_params = None
+    model = pipe
+
+    # Ejecuta GridSearchCV con el estimador sklearn MLPClassifier
+    if optimizer and str(optimizer).lower() == "gridsearchcv":
+        param_grid = {
+            "selector__population_size": [selector_params.get("population_size", 20)],
+            "selector__max_iter": [selector_params.get("max_iter", 50)],
+            "clf__hidden_layer_sizes": [(50,), (100,), (150,)],  # Agregado según el archivo gridSearchCV.py
+            "clf__activation": ["relu", "tanh"],                  # Agregado según el archivo gridSearchCV.py
+            "clf__solver": ["adam", "sgd"],                       # Agregado según el archivo gridSearchCV.py
+            "clf__max_iter": [200, 500, 1000],
+        }
+        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+        gs.fit(X_train, y_train)
+        model = gs.best_estimator_
+        best_params = gs.best_params_
+    else:
+        model = pipe.fit(X_train, y_train)
+
+    # 8) Evaluación en test usando mlp_evaluator
+    y_pred, y_proba = mlp_evaluator(X_train, y_train, X_test, y_test, mask=model.named_steps['selector'].get_support(), hidden_layer_sizes=hidden_layer_sizes, activation=activation, solver=solver, max_iter=max_iter, random_state=random_state, early_stopping=early_stopping, tol=tol)
+    metrics = compute_classification_metrics(y_test, y_pred, y_proba)
+
+    # 9) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "mlp",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_sel.columns),
-        "mask": mask_for_report,
-        "selector_fitness": fitness_for_report,
+        "selected_features": list(X_df.columns),
         "elapsed_seconds": elapsed,
         "extra_info": {
-            "tiempo_s": elapsed,
-            "optimizer": opt_name,
+            "optimizer": (optimizer if isinstance(optimizer, str) else getattr(optimizer, "__name__", str(optimizer))),
             "best_params": best_params,
         },
     }
