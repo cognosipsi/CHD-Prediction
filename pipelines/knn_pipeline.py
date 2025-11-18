@@ -93,7 +93,7 @@ def knn_pipeline(
         penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
         verbose         = bool(selector_params.get("verbose", False))
 
-        selector_est = BSOFeatureSelector(
+        bso = BSOFeatureSelector(
             population_size=population_size,
             max_iter=max_iter,
             cv=cv,
@@ -101,7 +101,7 @@ def knn_pipeline(
             penalty_weight=penalty_weight,
             verbose=verbose,
         )
-        steps.append(("selector", selector_est))
+        steps.append(("selector", bso))
         selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
 
     elif sel in ("m-abc", "mabc", "m_abc"):
