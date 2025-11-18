@@ -37,6 +37,7 @@ def knn_pipeline(
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
     n_neighbors: int = 3, 
+    random_state: int = 42,
     **selector_params,
 ):
     """
