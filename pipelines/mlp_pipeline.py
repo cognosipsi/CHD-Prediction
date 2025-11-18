@@ -166,7 +166,15 @@ def mlp_pipeline(
     # Scaler + Clasificador
     scaler = scale_features(scaler_type)
     steps.append(("scaler", scaler))
-    steps.append(("clf", MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, activation=activation, solver=solver, max_iter=max_iter, random_state=random_state)))
+    steps.append(("clf", MLPClassifier(
+        hidden_layer_sizes=hidden_layer_sizes,
+        activation=activation,
+        solver=solver,
+        max_iter=max_iter,
+        early_stopping=early_stopping,
+        tol=tol,
+        random_state=random_state,
+    )))
 
     pipe = ImbPipeline(steps)
 
@@ -192,7 +200,19 @@ def mlp_pipeline(
         model = pipe.fit(X_train, y_train)
 
     # 8) Evaluación en test usando mlp_evaluator
-    y_pred, y_proba = mlp_evaluator(X_train, y_train, X_test, y_test, mask=model.named_steps['selector'].get_support(), hidden_layer_sizes=hidden_layer_sizes, activation=activation, solver=solver, max_iter=max_iter, random_state=random_state, early_stopping=early_stopping, tol=tol)
+    sel_step = getattr(model, "named_steps", {}).get("selector") if hasattr(model, "named_steps") else None
+    mask = sel_step.get_support() if (sel_step is not None and hasattr(sel_step, "get_support")) else None
+    y_pred, y_proba = mlp_evaluator(
+        X_train, y_train, X_test, y_test,
+        mask=mask,
+        hidden_layer_sizes=hidden_layer_sizes,
+        activation=activation,
+        solver=solver,
+        max_iter=max_iter,
+        random_state=random_state,
+        early_stopping=early_stopping,
+        tol=tol,
+    )
     metrics = compute_classification_metrics(y_test, y_pred, y_proba)
 
     # 9) Resultado estandarizado

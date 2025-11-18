@@ -97,6 +97,7 @@ class WOAFeatureSelector(BaseEstimator, TransformerMixin):
                         best_score, best_agent = sc_new, new_agent.copy()
 
         self.best_mask_ = _binarize(best_agent).astype(np.int8)
+        self.support_ = np.asarray(self.best_mask_).astype(bool)
         self.best_score_ = float(best_score)
 
         return self
@@ -104,7 +105,18 @@ class WOAFeatureSelector(BaseEstimator, TransformerMixin):
     def transform(self, X):
         """
         Devuelve el conjunto de datos con solo las características seleccionadas.
+        Soporta tanto numpy arrays como pandas DataFrame/Series.
         """
+        if not hasattr(self, "best_mask_"):
+            raise AttributeError("El selector no está ajustado. Llama primero a fit().")
+        mask = np.asarray(self.best_mask_) == 1
+        # numpy array
+        if isinstance(X, np.ndarray):
+            return X[:, mask]
+        # pandas-like
+        if hasattr(X, "iloc"):
+            return X.iloc[:, mask]
+        # fallback
         return X[:, self.best_mask_ == 1]
 
     def _fitness(
@@ -147,8 +159,21 @@ class WOAFeatureSelector(BaseEstimator, TransformerMixin):
         """
         Devuelve las columnas seleccionadas del conjunto de datos.
         """
+        if not hasattr(self, "best_mask_"):
+            raise AttributeError("El selector no está ajustado. Llama primero a fit().")
         idx = np.where(self.best_mask_ == 1)[0]
         if hasattr(X, "columns"):
             return list(X.columns[idx])
         return [str(i) for i in idx]
 
+    def get_support(self, indices: bool = False):
+        """
+        Compatibilidad con la API de sklearn: devuelve una máscara booleana
+        (o los índices si indices=True) de las características seleccionadas.
+        """
+        if not hasattr(self, "best_mask_") or self.best_mask_ is None:
+            raise AttributeError("El selector no está ajustado. Llama primero a fit().")
+        mask = np.asarray(self.best_mask_).astype(bool)
+        if indices:
+            return np.where(mask)[0]
+        return mask
