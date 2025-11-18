@@ -106,7 +106,7 @@ def mlp_pipeline(
     elif sel in ("m-abc", "mabc", "m_abc"):
         # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
 
-        pop_size     = int(selector_params.get("pop_size", 20))
+        population_size     = int(selector_params.get("population_size", 20))
         max_iter   = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
         limit        = int(selector_params.get("limit", 5))
         patience     = int(selector_params.get("patience", 10))
@@ -117,7 +117,7 @@ def mlp_pipeline(
 
         mabc = MABCFeatureSelector(
             knn_k=knn_k,
-            population_size=pop_size,
+            population_size=population_size,
             max_iter=max_iter,     # <- importante
             limit=limit,
             patience=patience,
