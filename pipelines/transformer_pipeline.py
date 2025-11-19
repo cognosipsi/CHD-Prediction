@@ -42,8 +42,10 @@ def transformer_pipeline(
     d_model: int = 64,
     nhead: int = 4,
     num_layers: int = 2,
+    dropout: float = 0.2,
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
+    random_state: int = 42,
     **selector_params,
 ) -> dict:
     """
@@ -56,7 +58,10 @@ def transformer_pipeline(
     t0 = time.time()
 
     # --- Robustez: desanidar si vino selector_params=dict(...) desde main antiguos
-    if "selector_params" in selector_params and isinstance(selector_params["selector_params"], dict):
+    if (
+        "selector_params" in selector_params
+        and isinstance(selector_params["selector_params"], dict)
+    ):
         selector_params = dict(selector_params["selector_params"])
 
     # 1) Cargar dataset
@@ -96,7 +101,7 @@ def transformer_pipeline(
             population_size = int(selector_params.get("population_size", 20))
             max_iter = int(selector_params.get("max_iter", 50))
             cv = int(selector_params.get("cv", 5))
-            random_state = selector_params.get("random_state", None)
+            random_state_sel = int(selector_params.get("random_state", random_state))
             penalty_weight = float(selector_params.get("penalty_weight", 0.01))
             verbose = bool(selector_params.get("verbose", False))
 
@@ -104,7 +109,7 @@ def transformer_pipeline(
                 population_size=population_size,
                 max_iter=max_iter,
                 cv=cv,
-                random_state=random_state,
+                random_state=random_state_sel,
                 penalty_weight=penalty_weight,
                 verbose=verbose,
             )
@@ -113,7 +118,9 @@ def transformer_pipeline(
             idx = np.where(mask)[0]
             X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
 
-            selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
+            selector_name = (
+                f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
+            )
             mask_for_report = mask.astype(int).tolist()
             fitness_for_report = float(getattr(selector_est, "fitness_", np.nan))
 
@@ -123,10 +130,10 @@ def transformer_pipeline(
             max_iter = int(selector_params.get("max_iter", 30))
             limit = int(selector_params.get("limit", 5))
             patience = int(selector_params.get("patience", 10))
-            random_state = selector_params.get("random_state", 42)
+            random_state_sel = int(selector_params.get("random_state", random_state))
             cv_folds = int(selector_params.get("cv_folds", 5))
             knn_k = int(selector_params.get("knn_k", 5))
-            verbose      = bool(selector_params.get("verbose", False))
+            verbose = bool(selector_params.get("verbose", False))
 
             selector_est = MABCFeatureSelector(
                 knn_k=knn_k,
@@ -135,7 +142,7 @@ def transformer_pipeline(
                 limit=limit,
                 patience=patience,
                 cv_folds=cv_folds,
-                random_state=random_state,
+                random_state=random_state_sel,
                 verbose=verbose,
             )
 
@@ -143,19 +150,25 @@ def transformer_pipeline(
             mask = selector_est.get_support()
             idx = np.where(mask)[0]
             X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
-            selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds})"
+            selector_name = (
+                f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds})"
+            )
             mask_for_report = mask.astype(int).tolist()
-            fitness_for_report = float(getattr(selector_est, "best_fitness_", np.nan))
+            fitness_for_report = float(
+                getattr(selector_est, "best_fitness_", np.nan)
+            )
             
         elif sel in ("woa",):
-            X_scaled_all = scale_features(X_df.values, scaler_type=scaler_type)
+            scaler_for_woa = scale_features(scaler_type)
+            X_scaled_all = scaler_for_woa.fit_transform(X_df.values)
+            X_arr = X_scaled_all
 
             population_size = int(selector_params.get("population_size", 20))
             max_iter = int(selector_params.get("max_iter", 50))
             cv = int(selector_params.get("cv", 5))
             penalty_weight = float(selector_params.get("penalty_weight", 0.01))
             estimator = selector_params.get("estimator", None)
-            random_state = selector_params.get("random_state", None)
+            random_state_sel = int(selector_params.get("random_state", random_state))
 
             selector_est = WOAFeatureSelector(
                 population_size=population_size,
@@ -163,7 +176,7 @@ def transformer_pipeline(
                 estimator=estimator,
                 cv=cv,
                 penalty_weight=penalty_weight,
-                random_state=random_state,
+                random_state=random_state_sel,
             )
 
             selector_est.fit(X_arr, y)
@@ -174,24 +187,36 @@ def transformer_pipeline(
 
             selector_name = f"WOA (pop={population_size}, iters={max_iter}, cv={cv})"
             mask_for_report = mask.astype(int).tolist()
-            fitness_for_report = float(getattr(selector_est, "best_score_", np.nan))
+            fitness_for_report = float(
+                getattr(selector_est, "best_score_", np.nan)
+            )
 
         elif sel in ("none", "sin", "no"):
             selector_name = None
         else:
-            raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
+            raise ValueError(
+                "Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None."
+            )
 
     # 6) Escalado y split con las columnas finales
-    X_scaled = scale_features(X_sel.values, scaler_type=scaler_type)
+    X_arr_final = X_sel.values
     X_train, X_test, y_train, y_test = split_data(
-        X_scaled, y, use_smote=False    # <-- Pasa el parámetro aquí
+        X_arr_final,
+        y,
+        test_size=0.3,
+        random_state=random_state,
+        use_smote=False,
     )
 
     # 8) Construcción del Pipeline de imblearn con el wrapper del Transformer
     steps = []
 
+    # Escalado dentro del pipeline usando scale_features (devuelve el scaler sklearn)
+    scaler_step = scale_features(scaler_type)
+    steps.append(("scaler", scaler_step))
+
     if use_smote:
-        smote_random_state = selector_params.get("random_state", 42)
+        smote_random_state = int(selector_params.get("random_state", random_state))
         steps.append(("smote", SMOTE(random_state=smote_random_state)))
 
     clf = SklearnTransformerClassifier(
@@ -201,7 +226,8 @@ def transformer_pipeline(
         d_model=d_model,
         nhead=nhead,
         num_layers=num_layers,
-        random_state=selector_params.get("random_state", None),
+        dropout=dropout,
+        random_state=random_state,
     )
 
     steps.append(("clf", clf))
@@ -221,7 +247,7 @@ def transformer_pipeline(
             "clf__d_model": full_grid.get("d_model", [d_model]),
             "clf__nhead": full_grid.get("nhead", [nhead]),
             "clf__num_layers": full_grid.get("num_layers", [num_layers]),
-            "clf__dropout": full_grid.get("dropout", [0.2]),
+            "clf__dropout": full_grid.get("dropout", dropout),
         }
         gs = GridSearchCV(
             pipe,
@@ -245,7 +271,6 @@ def transformer_pipeline(
         y_proba = None
 
     metrics = compute_classification_metrics(y_test, y_pred, y_proba)
-
 
     # 9) Reporte
     elapsed = round(time.time() - t0, 4)
