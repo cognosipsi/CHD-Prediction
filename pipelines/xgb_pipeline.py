@@ -19,6 +19,9 @@ from selectores.bsocv import BSOFeatureSelector
 from selectores.woa import WOAFeatureSelector
 from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
+#Optimizadores
+from optimizadores.gridSearchCV import save_metrics_to_csv
+
 # === Reporte (igual que MLP) ===
 from utils.evaluacion import print_from_pipeline_result, compute_classification_metrics
 

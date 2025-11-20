@@ -187,7 +187,7 @@ def knn_pipeline(
             "clf__weights": ["uniform", "distance"],  
             "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
-        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+        gs = GridSearchCV(pipe, param_grid=param_grid, cv=2, scoring="accuracy", n_jobs=-1)
 
         # Guardar las métricas en CSV después de cada iteración
         gs.fit(X_train, y_train)
@@ -195,19 +195,22 @@ def knn_pipeline(
         # Recoger los resultados de cada iteración (incluyendo hiperparámetros)
         results = []
         for i, params in enumerate(gs.cv_results_["params"]):
-            for fold_idx in range(gs.cv):
+            for fold_idx in range(2):  # Para 2 folds
+                # Realizar predicción para esta combinación de parámetros y fold
+                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
+                y_pred = gs.best_estimator_.predict(X_test)
+                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
+
                 iteration_result = {
                     'y_true': y_test,
-                    'y_pred': gs.predict(X_test),  # Predicciones de la última iteración
-                    'y_pred_prob': gs.predict_proba(X_test)[:, 1],  # Probabilidades de la última iteración
+                    'y_pred': y_pred,  # Predicciones de esta iteración
+                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
                     'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'fold': fold_idx,  # Índice del fold
-                    'mean_test_score': gs.cv_results_['mean_test_score'][i],  # Promedio del puntaje de test
-                    'std_test_score': gs.cv_results_['std_test_score'][i],  # Desviación estándar del puntaje de test
+                    'cv_folds': 2,  # Número de folds de CV
                 }
                 results.append(iteration_result)
 
-        # Guardar las métricas
+        # Llamada a save_metrics_to_csv con los resultados
         save_metrics_to_csv(results, model_name="knn")
 
         model = gs.best_estimator_

@@ -18,6 +18,9 @@ from selectores.eliminacionpearson import PearsonRedundancyEliminator
 # Predictor
 from predictores.mlp import mlp_evaluator
 
+#Optimizadores
+from optimizadores.gridSearchCV import save_metrics_to_csv
+
 # Reporte
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
@@ -194,6 +197,26 @@ def mlp_pipeline(
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
         gs.fit(X_train, y_train)
+
+        # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
+        results = []
+        for i, params in enumerate(gs.cv_results_["params"]):
+            # Acceder a las métricas de cada fold para cada combinación de hiperparámetros
+            for fold_idx in range(gs.cv):
+                iteration_result = {
+                    'y_true': y_test,
+                    'y_pred': gs.predict(X_test),  # Predicciones de la última iteración
+                    'y_pred_prob': gs.predict_proba(X_test)[:, 1],  # Probabilidades de la última iteración
+                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
+                    'fold': fold_idx,  # Índice del fold
+                    'mean_test_score': gs.cv_results_['mean_test_score'][i],  # Promedio del puntaje de test
+                    'std_test_score': gs.cv_results_['std_test_score'][i],  # Desviación estándar del puntaje de test
+                }
+                results.append(iteration_result)
+
+        # Guardar las métricas
+        save_metrics_to_csv(results, model_name="mlp")
+
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
