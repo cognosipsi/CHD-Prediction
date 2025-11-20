@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Tuple, Optional
 import numpy as np
 import time
+from datetime import datetime
 
 from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
@@ -16,6 +17,9 @@ from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
 # Predictores KNN (funciones en predictores/knn.py)
 from predictores.knn import knn_evaluator
+
+#Optimizadores
+from optimizadores.gridSearchCV import save_metrics_to_csv
 
 # Utilidades de evaluación
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
@@ -118,7 +122,7 @@ def knn_pipeline(
         mabc = MABCFeatureSelector(
             knn_k=knn_k,
             population_size=population_size,
-            max_iter=max_iter,     # <- importante
+            max_iter=max_iter,  
             limit=limit,
             patience=patience,
             cv_folds=cv_folds,
@@ -184,7 +188,28 @@ def knn_pipeline(
             "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+
+        # Guardar las métricas en CSV después de cada iteración
         gs.fit(X_train, y_train)
+
+        # Recoger los resultados de cada iteración (incluyendo hiperparámetros)
+        results = []
+        for i, params in enumerate(gs.cv_results_["params"]):
+            for fold_idx in range(gs.cv):
+                iteration_result = {
+                    'y_true': y_test,
+                    'y_pred': gs.predict(X_test),  # Predicciones de la última iteración
+                    'y_pred_prob': gs.predict_proba(X_test)[:, 1],  # Probabilidades de la última iteración
+                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
+                    'fold': fold_idx,  # Índice del fold
+                    'mean_test_score': gs.cv_results_['mean_test_score'][i],  # Promedio del puntaje de test
+                    'std_test_score': gs.cv_results_['std_test_score'][i],  # Desviación estándar del puntaje de test
+                }
+                results.append(iteration_result)
+
+        # Guardar las métricas
+        save_metrics_to_csv(results, model_name="knn")
+
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
@@ -210,7 +235,7 @@ def knn_pipeline(
         "model": "knn",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_df.columns),  # Aquí sería la lista de todas las características
+        "selected_features": list(X_df.columns), 
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
         "extra_info": {

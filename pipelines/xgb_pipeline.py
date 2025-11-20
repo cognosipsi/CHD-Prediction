@@ -48,7 +48,7 @@ def xgb_pipeline(
     scaler_type: str = "standard",
     redundancy: Optional[str] = "none",
     xgb_params: Optional[Dict[str, Any]] = None,
-    test_size: float = 0.2,
+    test_size: float = 0.3,
     random_state: int = 42,
     use_smote: bool = True,
     optimizer: Optional[str] = "none", 

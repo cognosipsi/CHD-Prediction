@@ -5,6 +5,9 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import f1_score, make_scorer
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
+import pandas as pd
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score, confusion_matrix
+from datetime import datetime
 
 try:
     from xgboost import XGBClassifier
@@ -96,3 +99,44 @@ def run_grid_search(
         "best_params": gs.best_params_,
         "best_score": gs.best_score_,
     }
+
+def save_metrics_to_csv(results, model_name, filename_prefix="model_metrics"):
+    # Obtener la fecha y hora actuales para el nombre del archivo
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    
+    # Generar el nombre del archivo con el nombre del modelo y la fecha
+    filename = f"{filename_prefix}_{model_name}_{current_time}.csv"
+
+    # Lista para almacenar los resultados de las métricas
+    metrics_list = []
+
+    for result in results:
+        # Calcular las métricas
+        accuracy = accuracy_score(result['y_true'], result['y_pred'])
+        f1 = f1_score(result['y_true'], result['y_pred'])
+        precision = precision_score(result['y_true'], result['y_pred'])
+        recall = recall_score(result['y_true'], result['y_pred'])
+        roc_auc = roc_auc_score(result['y_true'], result['y_pred_prob'])
+        conf_matrix = confusion_matrix(result['y_true'], result['y_pred']).tolist()  # Convertir matriz de confusión a lista
+
+        # Obtener los hiperparámetros usados en esta iteración
+        hyperparameters = result['hyperparameters']  # Suponiendo que los hiperparámetros están almacenados como un diccionario
+
+        # Agregar las métricas y los hiperparámetros a la lista
+        metrics_list.append({
+            'accuracy': accuracy,
+            'f1_score': f1,
+            'precision': precision,
+            'recall': recall,
+            'roc_auc': roc_auc,
+            'conf_matrix': conf_matrix,
+            **hyperparameters  # Incluir los hiperparámetros como columnas en el CSV
+        })
+
+    # Convertir la lista de resultados a un DataFrame
+    metrics_df = pd.DataFrame(metrics_list)
+
+    # Guardar el DataFrame en un archivo CSV
+    metrics_df.to_csv(filename, index=False)
+
+    print(f"Metrics saved to {filename}")
