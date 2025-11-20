@@ -25,6 +25,8 @@ from optimizadores.gridSearchCV import save_metrics_to_csv
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
 #sklearn & imblearn
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import GridSearchCV
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
@@ -44,7 +46,7 @@ def mlp_pipeline(
     solver: str = "adam",
     max_iter: int = 1000,              # = mlpWOA.py
     random_state: int = 42,
-    early_stopping: bool = False,     # = mlpWOA.py
+    early_stopping: bool = True,     # = mlpWOA.py
     tol: float = 1e-4,
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
@@ -194,9 +196,14 @@ def mlp_pipeline(
             "clf__activation": ["relu", "tanh"],                  # Agregado según el archivo gridSearchCV.py
             "clf__solver": ["adam", "sgd"],                       # Agregado según el archivo gridSearchCV.py
             "clf__max_iter": [200, 500, 1000],
+            "clf__early_stopping": [True],
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
-        gs.fit(X_train, y_train)
+        
+        # Silenciar los warnings de convergencia dentro de GridSearchCV
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            gs.fit(X_train, y_train)
 
         # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
         results = []
@@ -208,7 +215,7 @@ def mlp_pipeline(
                     'y_pred': gs.predict(X_test),  # Predicciones de la última iteración
                     'y_pred_prob': gs.predict_proba(X_test)[:, 1],  # Probabilidades de la última iteración
                     'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'fold': fold_idx,  # Índice del fold
+                    'cv_folds': gs.cv,  # Número de folds de CV
                     'mean_test_score': gs.cv_results_['mean_test_score'][i],  # Promedio del puntaje de test
                     'std_test_score': gs.cv_results_['std_test_score'][i],  # Desviación estándar del puntaje de test
                 }
@@ -221,6 +228,7 @@ def mlp_pipeline(
         best_params = gs.best_params_
     else:
         model = pipe.fit(X_train, y_train)
+
 
     # 8) Evaluación en test usando mlp_evaluator
     sel_step = getattr(model, "named_steps", {}).get("selector") if hasattr(model, "named_steps") else None

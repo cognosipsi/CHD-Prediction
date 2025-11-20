@@ -187,7 +187,7 @@ def knn_pipeline(
             "clf__weights": ["uniform", "distance"],  
             "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
-        gs = GridSearchCV(pipe, param_grid=param_grid, cv=2, scoring="accuracy", n_jobs=-1)
+        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
 
         # Guardar las métricas en CSV después de cada iteración
         gs.fit(X_train, y_train)
@@ -195,7 +195,7 @@ def knn_pipeline(
         # Recoger los resultados de cada iteración (incluyendo hiperparámetros)
         results = []
         for i, params in enumerate(gs.cv_results_["params"]):
-            for fold_idx in range(2):  # Para 2 folds
+            for fold_idx in range(5):  # Para 5 folds
                 # Realizar predicción para esta combinación de parámetros y fold
                 gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
                 y_pred = gs.best_estimator_.predict(X_test)
@@ -206,7 +206,7 @@ def knn_pipeline(
                     'y_pred': y_pred,  # Predicciones de esta iteración
                     'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
                     'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'cv_folds': 2,  # Número de folds de CV
+                    'cv_folds': 5,  # Número de folds de CV
                 }
                 results.append(iteration_result)
 

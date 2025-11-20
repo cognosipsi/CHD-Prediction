@@ -225,10 +225,33 @@ def xgb_pipeline(
             refit=True,
         )
         gs.fit(X_train, y_train)
+
+        # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
+        results = []
+        for i, params in enumerate(gs.cv_results_["params"]):
+            for fold_idx in range(5):  # Para 5 folds
+                # Realizar predicción para esta combinación de parámetros y fold
+                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
+                y_pred = gs.best_estimator_.predict(X_test)
+                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
+
+                iteration_result = {
+                    'y_true': y_test,
+                    'y_pred': y_pred,  # Predicciones de esta iteración
+                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
+                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
+                    'cv_folds': 5,  # Número de folds de CV
+                }
+                results.append(iteration_result)
+
+        # Llamada a save_metrics_to_csv con los resultados
+        save_metrics_to_csv(results, model_name="xgb")
+
         best_estimator = gs.best_estimator_
         best_params = gs.best_params_
     else:
         best_estimator.fit(X_train, y_train)
+
 
     # 6) Evaluación en test
     y_pred = best_estimator.predict(X_test)

@@ -18,7 +18,7 @@ from selectores.eliminacionpearson import PearsonRedundancyEliminator
 from predictores.transformer import SklearnTransformerClassifier
 
 #Optimizadores
-from optimizadores.gridSearchCV import get_param_grid
+from optimizadores.gridSearchCV import get_param_grid, save_metrics_to_csv
 
 # Utilidades de evaluación
 from utils.evaluacion import print_from_pipeline_result, compute_classification_metrics
@@ -257,6 +257,28 @@ def transformer_pipeline(
             n_jobs=-1,
         )
         gs.fit(X_train, y_train)
+
+        # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
+        results = []
+        for i, params in enumerate(gs.cv_results_["params"]):
+            for fold_idx in range(5):  # Para 5 folds
+                # Realizar predicción para esta combinación de parámetros y fold
+                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
+                y_pred = gs.best_estimator_.predict(X_test)
+                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
+
+                iteration_result = {
+                    'y_true': y_test,
+                    'y_pred': y_pred,  # Predicciones de esta iteración
+                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
+                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
+                    'cv_folds': 5,  # Número de folds de CV
+                }
+                results.append(iteration_result)
+
+        # Llamada a save_metrics_to_csv con los resultados
+        save_metrics_to_csv(results, model_name="transformer")
+
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
