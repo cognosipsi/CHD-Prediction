@@ -198,7 +198,7 @@ def mlp_pipeline(
             "clf__max_iter": [200, 500, 1000],
             "clf__early_stopping": [True],
         }
-        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="accuracy", n_jobs=-1)
+        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1)
         
         # Silenciar los warnings de convergencia dentro de GridSearchCV
         with warnings.catch_warnings():

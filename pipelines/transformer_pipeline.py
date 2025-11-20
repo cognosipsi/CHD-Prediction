@@ -253,7 +253,7 @@ def transformer_pipeline(
             pipe,
             param_grid=param_grid,
             cv=int(selector_params.get("cv", 5)),
-            scoring="f1",
+            scoring="f1_macro",
             n_jobs=-1,
         )
         gs.fit(X_train, y_train)

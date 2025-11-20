@@ -220,7 +220,7 @@ def xgb_pipeline(
             pipe,
             param_grid=default_param_grid,
             cv=5,
-            scoring="roc_auc",
+            scoring="f1_macro",
             n_jobs=-1,
             refit=True,
         )
