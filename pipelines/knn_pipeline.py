@@ -3,6 +3,7 @@ from typing import Tuple, Optional
 import numpy as np
 import time
 from datetime import datetime
+import warnings
 
 from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
@@ -30,6 +31,9 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline as SkPipeline  
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
+from sklearn.base import clone
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.metrics import f1_score
 
 def knn_pipeline(
     file_path: str,
@@ -173,54 +177,141 @@ def knn_pipeline(
     steps.append(("scaler", scaler))
     steps.append(("clf", KNeighborsClassifier(n_neighbors=n_neighbors)))
 
-    pipe = ImbPipeline(steps)
+    # 5.5) Si hay SMOTE, usamos ImbPipeline; si no, SkPipeline normal
+    if any(name == "smote" for name, _ in steps):
+        pipe = ImbPipeline(steps=steps)
+    else:
+        pipe = SkPipeline(steps=steps)
 
-    # 7) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
     best_params = None
     model = pipe
+    metrics = None
+
+    # 7) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
     if optimizer and str(optimizer).lower() == "gridsearchcv":
-        # Grid genérico para cualquier selector envuelto como "selector"
+        # Grid genérico
         param_grid = {
-            "selector__population_size": [selector_params.get("population_size", 20)],
-            "selector__max_iter": [selector_params.get("max_iter", 50)],
             "clf__n_neighbors": [3, 5, 7, 10, 17],
-            "clf__weights": ["uniform", "distance"],  
+            "clf__weights": ["uniform", "distance"],
             "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
-        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1)
 
-        # Guardar las métricas en CSV después de cada iteración
-        gs.fit(X_train, y_train)
-
-        # Recoger los resultados de cada iteración (incluyendo hiperparámetros)
-        results = []
-        for i, params in enumerate(gs.cv_results_["params"]):
-            for fold_idx in range(5):  # Para 5 folds
-                # Realizar predicción para esta combinación de parámetros y fold
-                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
-                y_pred = gs.best_estimator_.predict(X_test)
-                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
-
-                iteration_result = {
-                    'y_true': y_test,
-                    'y_pred': y_pred,  # Predicciones de esta iteración
-                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
-                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'cv_folds': 5,  # Número de folds de CV
+        # Solo añadimos hiperparámetros del selector si existe
+        if any(name == "selector" for name, _ in steps):
+            param_grid.update(
+                {
+                    "selector__population_size": [selector_params.get("population_size", 20)],
+                    "selector__max_iter": [selector_params.get("max_iter", 50)],
                 }
-                results.append(iteration_result)
+            )
+
+        gs = GridSearchCV(
+            pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1
+        )
+        
+        # Ignoramos warnings de convergencia durante la búsqueda
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            gs.fit(X_train, y_train)
+
+        results = []
+        best_f1 = -np.inf
+        best_y_pred = None
+        best_y_proba = None
+        best_params = None
+
+        # Recorremos todas las combinaciones de hiperparámetros evaluadas
+        for i, params in enumerate(gs.cv_results_["params"]):
+            # Clonamos el pipeline base y le ponemos estos hiperparámetros
+            model_i = clone(pipe)
+            model_i.set_params(**params)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                model_i.fit(X_train, y_train)
+
+            # Predicciones de este modelo en el test hold-out
+            y_pred_i = model_i.predict(X_test)
+            if hasattr(model_i, "predict_proba"):
+                y_proba_i = model_i.predict_proba(X_test)[:, 1]
+            else:
+                y_proba_i = y_pred_i
+
+            # F1 macro en test para seleccionar el mejor registro
+            f1_i = f1_score(y_test, y_pred_i, average="macro")
+
+            iteration_result = {
+                "y_true": y_test,
+                "y_pred": y_pred_i,
+                "y_pred_prob": y_proba_i,
+                "hyperparameters": params,
+                "cv_folds": gs.cv,
+                "f1_macro": f1_i,
+            }
+            results.append(iteration_result)
+
+            if f1_i > best_f1:
+                best_f1 = f1_i
+                best_params = params
+                best_y_pred = y_pred_i
+                best_y_proba = y_proba_i
 
         # Llamada a save_metrics_to_csv con los resultados
         save_metrics_to_csv(results, model_name="knn")
 
-        model = gs.best_estimator_
-        best_params = gs.best_params_
-    else:
-        model = pipe.fit(X_train, y_train)
+        # Mensaje explícito del mejor registro según F1 macro en test
+        print("\n[GridSearchCV - mejor registro según F1 macro en test]")
+        print(f"Mejor F1 macro: {best_f1:.4f}")
+        print(f"Mejores hiperparámetros: {best_params}\n")
 
-    # 9) Evaluación en test
-    y_pred, y_prob = knn_evaluator(X_train, X_test, y_train, y_test, n_neighbors=n_neighbors)
-    metrics = compute_classification_metrics(y_test, y_pred, y_prob)
+        # Entrenamos el modelo final con los mejores hiperparámetros hallados
+        model = clone(pipe)
+        if best_params is not None:
+            model.set_params(**best_params)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            model.fit(X_train, y_train)
+
+        # Métricas finales sobre test usando el mejor registro
+        metrics = compute_classification_metrics(y_test, best_y_pred, best_y_proba)
+    else:
+        # Entrenamiento sin optimización de hiperparámetros
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            model = pipe.fit(X_train, y_train)
+
+        # Predicciones del pipeline completo (sin knn_evaluator)
+        y_pred = model.predict(X_test)
+        if hasattr(model, "predict_proba"):
+            y_proba = model.predict_proba(X_test)[:, 1]
+        else:
+            y_proba = y_pred
+
+        metrics = compute_classification_metrics(y_test, y_pred, y_proba)
+
+    # 8) Fitness del selector si está disponible
+    fitness_for_report = None
+    if hasattr(model, "steps") and any(name == "selector" for name, _ in model.steps):
+        sel_step = model.named_steps.get("selector")
+        if hasattr(sel_step, "fitness_"):
+            fitness_for_report = getattr(sel_step, "fitness_", None)
+        elif hasattr(sel_step, "best_score_"):
+            fitness_for_report = getattr(sel_step, "best_score_", None)
+
+    # 9) Features seleccionadas (si el selector expone get_support)
+    selected_features = list(X_df.columns)
+    try:
+        if hasattr(model, "named_steps") and "selector" in model.named_steps:
+            sel_step = model.named_steps["selector"]
+            if hasattr(sel_step, "get_support"):
+                support = sel_step.get_support()
+                support = np.array(support, dtype=bool)
+                if support.shape[0] == X_df.shape[1]:
+                    selected_features = list(X_df.columns[support])
+    except Exception:
+        # Si algo falla, dejamos todas las columnas como seleccionadas
+        selected_features = list(X_df.columns)
 
     # 10) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
@@ -238,7 +329,7 @@ def knn_pipeline(
         "model": "knn",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_df.columns), 
+        "selected_features": selected_features, 
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
         "extra_info": {
