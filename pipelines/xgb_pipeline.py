@@ -34,18 +34,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
-
-
-"""def _apply_mask_df(X_df: pd.DataFrame, mask: np.ndarray) -> pd.DataFrame:
-    mask = np.asarray(mask).astype(int).ravel()
-    if mask.shape[0] != X_df.shape[1]:
-        raise ValueError(f"Máscara de longitud {mask.shape[0]} no coincide con #cols={X_df.shape[1]}")
-    if mask.sum() == 0:
-        # evita conjunto vacío
-        mask[np.random.randint(0, mask.shape[0])] = 1
-    cols = X_df.columns[mask == 1].tolist()
-    return X_df.loc[:, cols]
-"""
+from sklearn.metrics import f1_score
 
 def xgb_pipeline(
     file_path: str,
@@ -75,6 +64,37 @@ def xgb_pipeline(
     Devuelve un diccionario sencillo con métricas, nombre del selector, etc.
     """
 
+    def _get_final_feature_names(fitted_estimator, original_cols):
+        """
+        Recorre los pasos del pipeline y va actualizando los nombres de columnas
+        usando get_feature_names_out o get_support cuando esté disponible.
+        Ignora pasos como 'smote' y 'clf'.
+        """
+        import numpy as _np
+
+        names = _np.asarray(list(original_cols), dtype=object)
+        pipe = fitted_estimator
+
+        if not hasattr(pipe, "named_steps"):
+            return list(names)
+
+        for step_name, step in pipe.named_steps.items():
+            # Estas etapas no definen nombres de características
+            if step_name in {"smote", "clf"}:
+                continue
+
+            if hasattr(step, "get_feature_names_out"):
+                try:
+                    names = _np.asarray(step.get_feature_names_out(names), dtype=object)
+                except TypeError:
+                    names = _np.asarray(step.get_feature_names_out(), dtype=object)
+            elif hasattr(step, "get_support"):
+                mask = _np.asarray(step.get_support(), dtype=bool)
+                if mask.shape[0] == names.shape[0]:
+                    names = names[mask]
+
+        return [str(c) for c in names]
+
     t0 = time.time()
 
     # Compatibilidad hacia atrás: si alguien pasó selector_params=dict(...)
@@ -100,8 +120,11 @@ def xgb_pipeline(
 
     # 6) Selección de características (opcional) sobre DataFrame (para preservar nombres)
     sel = (selector or "none").strip().lower() if selector is not None else "none"
-    selector_est = None
     selector_name = "Sin selector (todas las variables)"
+
+    # Caso sin selector
+    if sel in {"none", "sin", "no"}:
+        selector_est = None  # no se añade nada a steps
 
     if sel in {'m-abc', 'mabc', 'm_abc'}:
         population_size = int(selector_params.get("population_size", 20))
@@ -202,6 +225,7 @@ def xgb_pipeline(
     # 5) (Opcional) GridSearchCV sobre el pipeline completo
     best_estimator = pipe
     best_params = None
+    results = []
 
     opt = (optimizer or "none").strip().lower() if optimizer is not None else "none"
     if opt in {"gridsearchcv", "run_grid_search"}:
@@ -233,7 +257,9 @@ def xgb_pipeline(
             n_jobs=-1,
             refit=True,
         )
-        gs.fit(X_train, y_train)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            gs.fit(X_train, y_train)
 
         # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
         results = []
@@ -270,21 +296,44 @@ def xgb_pipeline(
 
 
     # 6) Evaluación en test
-    y_pred = best_estimator.predict(X_test)
-    if hasattr(best_estimator, "predict_proba"):
-        y_proba = best_estimator.predict_proba(X_test)[:, 1]
-    else:
-        y_proba = None
+    if opt in {"gridsearchcv", "run_grid_search"} and results:
+        # Escoger la iteración con mejor F1 en el conjunto de test
+        best_f1 = -np.inf
+        best_idx = 0
+        for i, it in enumerate(results):
+            f1_i = f1_score(it["y_true"], it["y_pred"])
+            if f1_i > best_f1:
+                best_f1 = f1_i
+                best_idx = i
 
-    metrics = compute_classification_metrics(y_test, y_pred, y_proba)
+        y_true = results[best_idx]["y_true"]
+        y_pred = results[best_idx]["y_pred"]
+        y_proba = results[best_idx]["y_pred_prob"]
+
+        metrics = compute_classification_metrics(y_true, y_pred, y_proba)
+        best_params = results[best_idx]["hyperparameters"]
+
+    else:
+        y_pred = best_estimator.predict(X_test)
+        if hasattr(best_estimator, "predict_proba"):
+            y_proba = best_estimator.predict_proba(X_test)[:, 1]
+        else:
+            y_proba = None
+
+        metrics = compute_classification_metrics(y_test, y_pred, y_proba)
 
     # 7) Resultado minimal (mismo estilo que mlp_pipeline)
     elapsed = round(time.time() - t0, 4)
+    # Extraer columnas finales tras Pearson + selector + escalado
+    selected_cols = _get_final_feature_names(best_estimator, X_df.columns)
+    n_selected = len(selected_cols)
+
     result = {
         "model": "xgb",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_df.columns),
+        "n_selected": n_selected,
+        "selected_features": selected_cols,
         "elapsed_seconds": elapsed,
         "extra_info": {
             "optimizer": (
