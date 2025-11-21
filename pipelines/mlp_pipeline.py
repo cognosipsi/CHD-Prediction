@@ -204,6 +204,19 @@ def mlp_pipeline(
             "clf__solver": ["adam", "sgd"],                       # Agregado según el archivo gridSearchCV.py
             "clf__max_iter": [200, 500, 1000],
         }
+
+        # Solo agregamos hiperparámetros del selector si el paso existe
+        has_selector = any(name == "selector" for name, _ in steps)
+        if has_selector:
+            param_grid.update(
+                {
+                    "selector__population_size": [
+                        selector_params.get("population_size", 20)
+                    ],
+                    "selector__max_iter": [selector_params.get("max_iter", 50)],
+                }
+            )
+
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1)
         
         # Silenciar los warnings de convergencia dentro de GridSearchCV
@@ -213,6 +226,9 @@ def mlp_pipeline(
 
         # Recoger resultados por combinación de hiperparámetros (una fila por iteración)
         results = []
+        best_f1 = float("-inf")
+        best_result_for_print = None
+
         for i, params in enumerate(gs.cv_results_["params"]):
             model_i = clone(pipe)
             model_i.set_params(**params)
@@ -222,7 +238,34 @@ def mlp_pipeline(
                 model_i.fit(X_train, y_train)
 
             y_pred_i = model_i.predict(X_test)
-            y_proba_i = model_i.predict_proba(X_test)[:, 1]
+            if hasattr(model_i, "predict_proba"):
+                y_proba_i = model_i.predict_proba(X_test)[:, 1]
+            else:
+                y_proba_i = y_pred_i
+
+            # Métricas en test para poder quedarnos con el mejor F1
+            metrics_i = compute_classification_metrics(y_test, y_pred_i, y_proba_i)
+
+            # Intentamos distintas claves posibles para F1
+            f1_i = None
+            if isinstance(metrics_i, dict):
+                if "f1_score" in metrics_i:
+                    f1_i = metrics_i["f1_score"]
+                elif "f1_macro" in metrics_i:
+                    f1_i = metrics_i["f1_macro"]
+                elif "f1" in metrics_i:
+                    f1_i = metrics_i["f1"]
+
+            if f1_i is None:
+                f1_i = 0.0
+
+            if f1_i > best_f1:
+                best_f1 = f1_i
+                best_result_for_print = {
+                    "iteration": i + 1,
+                    "hyperparameters": params,
+                    "metrics": metrics_i,
+                }
 
             iteration_result = {
                 "y_true": y_test,
@@ -237,24 +280,47 @@ def mlp_pipeline(
         # Guardar métricas de todas las iteraciones del grid
         save_metrics_to_csv(results, model_name="mlp")
 
+        # Imprimir resultados del registro con mejor F1 en test
+        if best_result_for_print is not None:
+            print("\n=== Registro con mejor F1-score (test) ===")
+            print(f"Iteración (1-based): {best_result_for_print['iteration']}")
+            print("Hiperparámetros:")
+            for k, v in best_result_for_print["hyperparameters"].items():
+                print(f"  {k}: {v}")
+            print("Métricas:")
+            for k, v in best_result_for_print["metrics"].items():
+                print(f"  {k}: {v}")
+
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
         model = pipe.fit(X_train, y_train)
 
 
-    # 8) Evaluación en test usando mlp_evaluator
+    # 7) Evaluación en test
+    # Recuperamos (si existe) el selector del pipeline final
+    sel_step = None
+    if hasattr(model, "named_steps"):
+        sel_step = model.named_steps.get("selector")
 
     if optimizer and str(optimizer).lower() == "gridsearchcv":
         # Con GridSearchCV usamos directamente el best_estimator_
         y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)[:, 1]
+        if hasattr(model, "predict_proba"):
+            y_proba = model.predict_proba(X_test)[:, 1]
+        else:
+            y_proba = y_pred
     else:
+        # Sin GridSearchCV usamos mlp_evaluator, pero usando la máscara del selector del pipeline
+        mask = sel_step.get_support() if (
+            sel_step is not None and hasattr(sel_step, "get_support")
+        ) else None
 
-        sel_step = getattr(model, "named_steps", {}).get("selector") if hasattr(model, "named_steps") else None
-        mask = sel_step.get_support() if (sel_step is not None and hasattr(sel_step, "get_support")) else None
         y_pred, y_proba = mlp_evaluator(
-            X_train, y_train, X_test, y_test,
+            X_train,
+            y_train,
+            X_test,
+            y_test,
             mask=mask,
             hidden_layer_sizes=hidden_layer_sizes,
             activation=activation,
@@ -264,7 +330,27 @@ def mlp_pipeline(
             early_stopping=early_stopping,
             tol=tol,
         )
+
     metrics = compute_classification_metrics(y_test, y_pred, y_proba)
+
+    # 8) Determinar características seleccionadas (coherente con transformer_pipeline)
+    selected_features = feature_names
+    if sel_step is not None and hasattr(sel_step, "get_support"):
+        support = sel_step.get_support()
+        if support is not None:
+            support_arr = np.array(support)
+            # Caso máscara booleana
+            if support_arr.dtype == bool and support_arr.size == len(feature_names):
+                selected_features = [
+                    name for name, keep in zip(feature_names, support_arr) if keep
+                ]
+            # Caso índices enteros
+            elif np.issubdtype(support_arr.dtype, np.integer):
+                selected_features = [
+                    feature_names[idx]
+                    for idx in support_arr
+                    if 0 <= idx < len(feature_names)
+                ]
 
     # 9) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
