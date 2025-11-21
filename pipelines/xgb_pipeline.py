@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any
 import numpy as np
 import time
+import warnings
 
 # === Preprocesamiento ===
 from preprocesamiento.lectura_datos import load_data
@@ -29,7 +30,10 @@ from utils.evaluacion import print_from_pipeline_result, compute_classification_
 
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
+from sklearn.base import clone
+from sklearn.exceptions import ConvergenceWarning
 
 
 """def _apply_mask_df(X_df: pd.DataFrame, mask: np.ndarray) -> pd.DataFrame:
@@ -179,7 +183,12 @@ def xgb_pipeline(
     clf = build_xgb(merged_xgb_params)
     steps.append(("clf", clf))
 
-    pipe = ImbPipeline(steps=steps)
+    # Si hay SMOTE, usamos ImbPipeline; si no, Pipeline normal
+    if any(name == "smote" for name, _ in steps):
+        pipe = ImbPipeline(steps=steps)
+    else:
+        pipe = Pipeline(steps=steps)
+
 
     # 4) Train/test split usando tu helper split_data (sin SMOTE aquí)
     X_train, X_test, y_train, y_test = split_data(
@@ -229,20 +238,27 @@ def xgb_pipeline(
         # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
         results = []
         for i, params in enumerate(gs.cv_results_["params"]):
-            for fold_idx in range(5):  # Para 5 folds
-                # Realizar predicción para esta combinación de parámetros y fold
-                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
-                y_pred = gs.best_estimator_.predict(X_test)
-                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
+            # Clonamos el pipeline base y le ponemos estos hiperparámetros
+            model_i = clone(pipe)
+            model_i.set_params(**params)
 
-                iteration_result = {
-                    'y_true': y_test,
-                    'y_pred': y_pred,  # Predicciones de esta iteración
-                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
-                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'cv_folds': 5,  # Número de folds de CV
-                }
-                results.append(iteration_result)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                model_i.fit(X_train, y_train)
+
+            y_pred_i = model_i.predict(X_test)
+            y_proba_i = model_i.predict_proba(X_test)[:, 1]
+
+            iteration_result = {
+                "y_true": y_test,
+                "y_pred": y_pred_i,
+                "y_pred_prob": y_proba_i,
+                "hyperparameters": params,
+                "cv_folds": gs.cv,
+                "mean_test_score": gs.cv_results_["mean_test_score"][i],
+                "std_test_score": gs.cv_results_["std_test_score"][i],
+            }
+            results.append(iteration_result)
 
         # Llamada a save_metrics_to_csv con los resultados
         save_metrics_to_csv(results, model_name="xgb")
