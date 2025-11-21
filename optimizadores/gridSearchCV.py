@@ -110,25 +110,21 @@ def save_metrics_to_csv(results, model_name, filename_prefix="model_metrics"):
     # Lista para almacenar los resultados de las métricas
     metrics_list = []
 
-    for result in results:
-        # Asegúrate de que estás calculando las métricas para cada fold y combinación de hiperparámetros
-        for fold_idx in range(result['cv_folds']):
-            # Calcular las métricas
-            f1 = f1_score(result['y_true'], result['y_pred'])
-            roc_auc = roc_auc_score(result['y_true'], result['y_pred_prob'])
-            conf_matrix = confusion_matrix(result['y_true'], result['y_pred']).tolist()  # Convertir matriz de confusión a lista
+    for iter_idx, result in enumerate(results, start=1):
+        f1 = f1_score(result['y_true'], result['y_pred'])
+        roc_auc = roc_auc_score(result['y_true'], result['y_pred_prob'])
+        conf_matrix = confusion_matrix(result['y_true'], result['y_pred']).tolist()
+        hyperparameters = result['hyperparameters']
 
-            # Obtener los hiperparámetros usados en esta iteración
-            hyperparameters = result['hyperparameters']  # Suponiendo que los hiperparámetros están almacenados como un diccionario
-
-            # Agregar las métricas y los hiperparámetros a la lista
-            metrics_list.append({
-                'f1_score': round(f1, 4),  # Redondear las métricas a 4 decimales
-                'roc_auc': round(roc_auc, 4),
-                'conf_matrix': conf_matrix,
-                'fold': fold_idx,  # Guardar el índice del fold
-                **hyperparameters  # Incluir los hiperparámetros como columnas en el CSV
-            })
+        metrics_list.append({
+            'iteracion': iter_idx,                # id de iteración
+            'f1_score': round(f1, 4),
+            'roc_auc': round(roc_auc, 4),
+            'conf_matrix': conf_matrix,
+            'mean_cv_score': result.get('mean_test_score'),
+            'std_cv_score': result.get('std_test_score'),
+            **hyperparameters
+        })
 
     # Convertir la lista de resultados a un DataFrame
     metrics_df = pd.DataFrame(metrics_list)

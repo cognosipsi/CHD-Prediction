@@ -30,6 +30,7 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import GridSearchCV
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.base import clone
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 from sklearn.pipeline import Pipeline
@@ -160,28 +161,34 @@ def mlp_pipeline(
         selector_name = f"WOA (pop={population_size}, iters={max_iter}, cv={cv}, k={n_neighbors})"
 
     elif sel in ("none", "sin", "no"):
+        selector_name = "none"
         pass
     else:
         raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
 
     # Paso SMOTE (opcional, DENTRO del pipeline)
     if use_smote:
-        steps.append(("smote", SMOTE(random_state=42)))
+        steps.append(("smote", SMOTE(random_state=random_state)))
         
     # Scaler + Clasificador
-    scaler = scale_features(scaler_type)
-    steps.append(("scaler", scaler))
-    steps.append(("clf", MLPClassifier(
+    steps.append(("scaler", scale_features(scaler_type)))
+
+    clf = MLPClassifier(
         hidden_layer_sizes=hidden_layer_sizes,
         activation=activation,
         solver=solver,
         max_iter=max_iter,
+        random_state=random_state,
         early_stopping=early_stopping,
         tol=tol,
-        random_state=random_state,
-    )))
+    )
+    steps.append(("clf", clf))
 
-    pipe = ImbPipeline(steps)
+    # Decidimos si el pipeline base lleva SMOTE (ImbPipeline) o no
+    if any(name == "smote" for name, _ in steps):
+        pipe = ImbPipeline(steps=steps)
+    else:
+        pipe = Pipeline(steps=steps)
 
     # 6) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
     best_params = None
@@ -196,7 +203,6 @@ def mlp_pipeline(
             "clf__activation": ["relu", "tanh"],                  # Agregado según el archivo gridSearchCV.py
             "clf__solver": ["adam", "sgd"],                       # Agregado según el archivo gridSearchCV.py
             "clf__max_iter": [200, 500, 1000],
-            "clf__early_stopping": [True],
         }
         gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1)
         
@@ -205,23 +211,30 @@ def mlp_pipeline(
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             gs.fit(X_train, y_train)
 
-        # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
+        # Recoger resultados por combinación de hiperparámetros (una fila por iteración)
         results = []
         for i, params in enumerate(gs.cv_results_["params"]):
-            # Acceder a las métricas de cada fold para cada combinación de hiperparámetros
-            for fold_idx in range(gs.cv):
-                iteration_result = {
-                    'y_true': y_test,
-                    'y_pred': gs.predict(X_test),  # Predicciones de la última iteración
-                    'y_pred_prob': gs.predict_proba(X_test)[:, 1],  # Probabilidades de la última iteración
-                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'cv_folds': gs.cv,  # Número de folds de CV
-                    'mean_test_score': gs.cv_results_['mean_test_score'][i],  # Promedio del puntaje de test
-                    'std_test_score': gs.cv_results_['std_test_score'][i],  # Desviación estándar del puntaje de test
-                }
-                results.append(iteration_result)
+            model_i = clone(pipe)
+            model_i.set_params(**params)
 
-        # Guardar las métricas
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                model_i.fit(X_train, y_train)
+
+            y_pred_i = model_i.predict(X_test)
+            y_proba_i = model_i.predict_proba(X_test)[:, 1]
+
+            iteration_result = {
+                "y_true": y_test,
+                "y_pred": y_pred_i,
+                "y_pred_prob": y_proba_i,
+                "hyperparameters": params,
+                "mean_test_score": gs.cv_results_["mean_test_score"][i],
+                "std_test_score": gs.cv_results_["std_test_score"][i],
+            }
+            results.append(iteration_result)
+
+        # Guardar métricas de todas las iteraciones del grid
         save_metrics_to_csv(results, model_name="mlp")
 
         model = gs.best_estimator_
@@ -231,19 +244,26 @@ def mlp_pipeline(
 
 
     # 8) Evaluación en test usando mlp_evaluator
-    sel_step = getattr(model, "named_steps", {}).get("selector") if hasattr(model, "named_steps") else None
-    mask = sel_step.get_support() if (sel_step is not None and hasattr(sel_step, "get_support")) else None
-    y_pred, y_proba = mlp_evaluator(
-        X_train, y_train, X_test, y_test,
-        mask=mask,
-        hidden_layer_sizes=hidden_layer_sizes,
-        activation=activation,
-        solver=solver,
-        max_iter=max_iter,
-        random_state=random_state,
-        early_stopping=early_stopping,
-        tol=tol,
-    )
+
+    if optimizer and str(optimizer).lower() == "gridsearchcv":
+        # Con GridSearchCV usamos directamente el best_estimator_
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1]
+    else:
+
+        sel_step = getattr(model, "named_steps", {}).get("selector") if hasattr(model, "named_steps") else None
+        mask = sel_step.get_support() if (sel_step is not None and hasattr(sel_step, "get_support")) else None
+        y_pred, y_proba = mlp_evaluator(
+            X_train, y_train, X_test, y_test,
+            mask=mask,
+            hidden_layer_sizes=hidden_layer_sizes,
+            activation=activation,
+            solver=solver,
+            max_iter=max_iter,
+            random_state=random_state,
+            early_stopping=early_stopping,
+            tol=tol,
+        )
     metrics = compute_classification_metrics(y_test, y_pred, y_proba)
 
     # 9) Resultado estandarizado
