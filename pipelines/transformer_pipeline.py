@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 import time
+import warnings
 import numpy as np
 
 from preprocesamiento.lectura_datos import load_data
@@ -25,6 +26,9 @@ from utils.evaluacion import print_from_pipeline_result, compute_classification_
 
 # sklearn / imblearn
 from sklearn.model_selection import GridSearchCV
+from sklearn.base import clone
+from sklearn.pipeline import Pipeline
+from sklearn.exceptions import ConvergenceWarning
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 
@@ -86,15 +90,26 @@ def transformer_pipeline(
     X_df = df.drop(columns=["chd"])  # conservamos nombres para reportes
     y = df["chd"].values
 
+    # 6) Split train/test (ANTES de selección de características para evitar fugas)
+    test_size = float(selector_params.get("test_size", 0.3))
+    X_train_df, X_test_df, y_train, y_test = split_data(
+        X_df,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        use_smote=False,  # SMOTE solo dentro del Pipeline
+    )
+
     # 5) Selección de características (opcional)
-    X_sel = X_df
+    X_train_sel_df = X_train_df
+    X_test_sel_df = X_test_df
     selector_name: Optional[str] = None
     mask_for_report = None
     fitness_for_report = None
 
     if selector is not None:
         sel = selector.strip().lower()
-        X_arr = X_df.values  # los selectores trabajan sobre ndarray; usamos la máscara sobre X_df
+        X_train_arr = X_train_df.values  # los selectores trabajan sobre ndarray; usamos la máscara sobre X_df
 
         if sel in ("bso", "bso-cv", "bsocv"):
             # Normaliza/filtra kwargs para BSO-CV
@@ -113,10 +128,17 @@ def transformer_pipeline(
                 penalty_weight=penalty_weight,
                 verbose=verbose,
             )
-            selector_est.fit(X_arr, y)
+            selector_est.fit(X_train_arr, y_train)
             mask = selector_est.get_support()
             idx = np.where(mask)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
+
+            # Aplicamos la máscara a train y test usando las columnas de X_df
+            if idx.size > 0:
+                X_train_sel_df = X_train_df.iloc[:, idx]
+                X_test_sel_df = X_test_df.iloc[:, idx]
+            else:
+                X_train_sel_df = X_train_df
+                X_test_sel_df = X_test_df
 
             selector_name = (
                 f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
@@ -146,10 +168,17 @@ def transformer_pipeline(
                 verbose=verbose,
             )
 
-            selector_est.fit(X_arr, y)
+            selector_est.fit(X_train_arr, y_train)
             mask = selector_est.get_support()
             idx = np.where(mask)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
+
+            if idx.size > 0:
+                X_train_sel_df = X_train_df.iloc[:, idx]
+                X_test_sel_df = X_test_df.iloc[:, idx]
+            else:
+                X_train_sel_df = X_train_df
+                X_test_sel_df = X_test_df
+
             selector_name = (
                 f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds})"
             )
@@ -160,8 +189,7 @@ def transformer_pipeline(
             
         elif sel in ("woa",):
             scaler_for_woa = scale_features(scaler_type)
-            X_scaled_all = scaler_for_woa.fit_transform(X_df.values)
-            X_arr = X_scaled_all
+            X_scaled_train = scaler_for_woa.fit_transform(X_train_df.values)
 
             population_size = int(selector_params.get("population_size", 20))
             max_iter = int(selector_params.get("max_iter", 50))
@@ -179,11 +207,17 @@ def transformer_pipeline(
                 random_state=random_state_sel,
             )
 
-            selector_est.fit(X_arr, y)
+            selector_est.fit(X_scaled_train, y_train)
             # WOAFeatureSelector expone best_mask_ y best_score_
             mask = selector_est.best_mask_.astype(bool)
             idx = np.where(mask)[0]
-            X_sel = X_df.iloc[:, idx] if idx.size > 0 else X_df
+
+            if idx.size > 0:
+                X_train_sel_df = X_train_df.iloc[:, idx]
+                X_test_sel_df = X_test_df.iloc[:, idx]
+            else:
+                X_train_sel_df = X_train_df
+                X_test_sel_df = X_test_df
 
             selector_name = f"WOA (pop={population_size}, iters={max_iter}, cv={cv})"
             mask_for_report = mask.astype(int).tolist()
@@ -198,15 +232,9 @@ def transformer_pipeline(
                 "Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None."
             )
 
-    # 6) Escalado y split con las columnas finales
-    X_arr_final = X_sel.values
-    X_train, X_test, y_train, y_test = split_data(
-        X_arr_final,
-        y,
-        test_size=0.3,
-        random_state=random_state,
-        use_smote=False,
-    )
+    # 8) Datos finales para el modelo (post-selección, pre-escalado)
+    X_train_final = X_train_sel_df.values
+    X_test_final = X_test_sel_df.values
 
     # 8) Construcción del Pipeline de imblearn con el wrapper del Transformer
     steps = []
@@ -249,32 +277,46 @@ def transformer_pipeline(
             "clf__num_layers": full_grid.get("num_layers", [num_layers]),
             "clf__dropout": full_grid.get("dropout", dropout),
         }
+        cv_folds = int(selector_params.get("cv", 5))
         gs = GridSearchCV(
             pipe,
             param_grid=param_grid,
-            cv=int(selector_params.get("cv", 5)),
+            cv=cv_folds,
             scoring="f1_macro",
             n_jobs=-1,
         )
-        gs.fit(X_train, y_train)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            gs.fit(X_train_final, y_train)
 
-        # Recoger los resultados de cada iteración (incluyendo hiperparámetros y cada fold)
+        # Guardar resultados de todas las combinaciones de hiperparámetros en CSV
         results = []
-        for i, params in enumerate(gs.cv_results_["params"]):
-            for fold_idx in range(5):  # Para 5 folds
-                # Realizar predicción para esta combinación de parámetros y fold
-                gs.best_estimator_.fit(X_train, y_train)  # Asegurarse de que el modelo está entrenado
-                y_pred = gs.best_estimator_.predict(X_test)
-                y_pred_prob = gs.best_estimator_.predict_proba(X_test)[:, 1]  # Probabilidad de la clase positiva
 
-                iteration_result = {
-                    'y_true': y_test,
-                    'y_pred': y_pred,  # Predicciones de esta iteración
-                    'y_pred_prob': y_pred_prob,  # Probabilidades de esta iteración
-                    'hyperparameters': params,  # Los hiperparámetros para esta iteración
-                    'cv_folds': 5,  # Número de folds de CV
-                }
-                results.append(iteration_result)
+        for params in gs.cv_results_["params"]:
+            # Clonamos el pipeline base y le ponemos estos hiperparámetros
+            model_i = clone(pipe)
+            model_i.set_params(**params)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                model_i.fit(X_train_final, y_train)
+
+            y_pred_i = model_i.predict(X_test_final)
+            # Se asume que el clasificador expone predict_proba; si no, usamos y_pred
+            if hasattr(model_i, "predict_proba"):
+                y_proba_i = model_i.predict_proba(X_test_final)[:, 1]
+            else:
+                y_proba_i = y_pred_i
+
+            iteration_result = {
+                "y_true": y_test,
+                "y_pred": y_pred_i,
+                "y_pred_prob": y_proba_i,
+                "hyperparameters": params,
+                "selector": selector_name,
+                "model_name": "transformer",
+            }
+            results.append(iteration_result)
 
         # Llamada a save_metrics_to_csv con los resultados
         save_metrics_to_csv(results, model_name="transformer")
@@ -282,13 +324,15 @@ def transformer_pipeline(
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
-        model = pipe.fit(X_train, y_train)
+        # Sin optimizador: ajuste directo
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            model = pipe.fit(X_train_final, y_train)
 
     # 8.c) Evaluación en el conjunto de test
-    y_pred = model.predict(X_test)
-
+    y_pred = model.predict(X_test_final)
     try:
-        y_proba = model.predict_proba(X_test)[:, 1]
+        y_proba = model.predict_proba(X_test_final)[:, 1]
     except Exception:
         y_proba = None
 
@@ -300,7 +344,7 @@ def transformer_pipeline(
         "model": "transformer",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_sel.columns),
+        "selected_features": list(X_train_sel_df.columns),
         "mask": mask_for_report,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
