@@ -15,10 +15,10 @@ from selectores.mabc import MABCFeatureSelector
 from selectores.woa import WOAFeatureSelector
 from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
-# Predictores (ahora sí existen ambas funciones)
+# Predictores
 from predictores.transformer import SklearnTransformerClassifier
 
-#Optimizadores
+# Optimizadores
 from optimizadores.gridSearchCV import get_param_grid, save_metrics_to_csv
 
 # Utilidades de evaluación
@@ -27,10 +27,11 @@ from utils.evaluacion import print_from_pipeline_result, compute_classification_
 # sklearn / imblearn
 from sklearn.model_selection import GridSearchCV
 from sklearn.base import clone
-from sklearn.pipeline import Pipeline
 from sklearn.exceptions import ConvergenceWarning
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
+
+from sklearn.metrics import f1_score
 
 
 def transformer_pipeline(
@@ -84,7 +85,7 @@ def transformer_pipeline(
         red = PearsonRedundancyEliminator(metodo=redundancy)
         df = red.fit_transform(df)
 
-    # 4) Definir X, y
+    # 5) Definir X, y
     if "chd" not in df.columns:
         raise ValueError("La columna objetivo 'chd' no se encuentra en el dataset.")
     X_df = df.drop(columns=["chd"])  # conservamos nombres para reportes
@@ -100,7 +101,7 @@ def transformer_pipeline(
         use_smote=False,  # SMOTE solo dentro del Pipeline
     )
 
-    # 5) Selección de características (opcional)
+    # 7) Selección de características (opcional)
     X_train_sel_df = X_train_df
     X_test_sel_df = X_test_df
     selector_name: Optional[str] = None
@@ -109,7 +110,7 @@ def transformer_pipeline(
 
     if selector is not None:
         sel = selector.strip().lower()
-        X_train_arr = X_train_df.values  # los selectores trabajan sobre ndarray; usamos la máscara sobre X_df
+        X_train_arr = X_train_df.values  # los selectores trabajan sobre ndarray
 
         if sel in ("bso", "bso-cv", "bsocv"):
             # Normaliza/filtra kwargs para BSO-CV
@@ -186,7 +187,7 @@ def transformer_pipeline(
             fitness_for_report = float(
                 getattr(selector_est, "best_fitness_", np.nan)
             )
-            
+
         elif sel in ("woa",):
             scaler_for_woa = scale_features(scaler_type)
             X_scaled_train = scaler_for_woa.fit_transform(X_train_df.values)
@@ -236,7 +237,7 @@ def transformer_pipeline(
     X_train_final = X_train_sel_df.values
     X_test_final = X_test_sel_df.values
 
-    # 8) Construcción del Pipeline de imblearn con el wrapper del Transformer
+    # 9) Construcción del Pipeline de imblearn con el wrapper del Transformer
     steps = []
 
     # Escalado dentro del pipeline usando scale_features (devuelve el scaler sklearn)
@@ -261,10 +262,9 @@ def transformer_pipeline(
     steps.append(("clf", clf))
     pipe = ImbPipeline(steps=steps)
 
-    # 7) Entrenamiento + evaluación (con optimización opcional)
+    # 10) Entrenamiento + evaluación (con optimización opcional)
     best_params = None
 
-    # Ejecuta GridSearchCV con el estimador sklearn wrapper del Transformer
     if optimizer and str(optimizer).lower() == "gridsearchcv":
         full_grid = get_param_grid("transformer")
         # Convertimos el grid genérico a nombres de parámetros dentro del Pipeline (clf__...)
@@ -278,11 +278,17 @@ def transformer_pipeline(
             "clf__dropout": full_grid.get("dropout", dropout),
         }
         cv_folds = int(selector_params.get("cv", 5))
+
+        # scorer manual para F1 (binario, clase positiva=1)
+        def f1_scorer(estimator, X_val, y_val):
+            y_pred = estimator.predict(X_val)
+            return f1_score(y_val, y_pred)
+
         gs = GridSearchCV(
             pipe,
             param_grid=param_grid,
             cv=cv_folds,
-            scoring="f1_macro",
+            scoring=f1_scorer,  # optimizamos ROC-AUC
             n_jobs=-1,
         )
         with warnings.catch_warnings():
@@ -329,7 +335,7 @@ def transformer_pipeline(
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             model = pipe.fit(X_train_final, y_train)
 
-    # 8.c) Evaluación en el conjunto de test
+    # 11) Evaluación en el conjunto de test
     y_pred = model.predict(X_test_final)
     try:
         y_proba = model.predict_proba(X_test_final)[:, 1]
@@ -338,7 +344,7 @@ def transformer_pipeline(
 
     metrics = compute_classification_metrics(y_test, y_pred, y_proba)
 
-    # 9) Reporte
+    # 12) Reporte
     elapsed = round(time.time() - t0, 4)
     result = {
         "model": "transformer",

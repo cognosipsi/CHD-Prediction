@@ -196,6 +196,8 @@ class SklearnTransformerClassifier(BaseEstimator, ClassifierMixin):
     # - Es compatible con Pipeline, GridSearchCV, etc.
     # - Internamente puede usar un pequeño conjunto de validación para
     #   monitorizar métricas, pero eso NO afecta la interfaz sklearn.
+    
+    _estimator_type = "classifier"
 
     def __init__(
         self,
