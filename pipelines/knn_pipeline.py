@@ -4,6 +4,7 @@ import numpy as np
 import time
 from datetime import datetime
 import warnings
+import pandas as pd
 
 from preprocesamiento.lectura_datos import load_data
 from preprocesamiento.codificacion import encode_features
@@ -299,20 +300,39 @@ def knn_pipeline(
         elif hasattr(sel_step, "best_score_"):
             fitness_for_report = getattr(sel_step, "best_score_", None)
 
-    # 9) Features seleccionadas (si el selector expone get_support)
+        # 9) Features seleccionadas (si el selector expone get_support)
     selected_features = list(X_df.columns)
     try:
+        # empezamos desde los nombres originales
+        cols = list(X_df.columns)
+
+        # si hay un paso de redundancia que expone get_feature_names_out, usarlo
+        if hasattr(model, "named_steps") and "redundancy" in model.named_steps:
+            red = model.named_steps["redundancy"]
+            if hasattr(red, "get_feature_names_out"):
+                cols = list(red.get_feature_names_out(cols))
+            else:
+                # intentar inferir nombres aplicando transform sobre el DataFrame
+                try:
+                    transformed = red.transform(X_df)
+                    if hasattr(transformed, "columns"):
+                        cols = list(transformed.columns)
+                except Exception:
+                    # fallback: mantener cols sin cambios
+                    pass
+
+        # luego aplicar la máscara del selector (si la hay)
         if hasattr(model, "named_steps") and "selector" in model.named_steps:
             sel_step = model.named_steps["selector"]
             if hasattr(sel_step, "get_support"):
-                support = sel_step.get_support()
-                support = np.array(support, dtype=bool)
-                if support.shape[0] == X_df.shape[1]:
-                    selected_features = list(X_df.columns[support])
-    except Exception:
-        # Si algo falla, dejamos todas las columnas como seleccionadas
-        selected_features = list(X_df.columns)
+                support = np.array(sel_step.get_support(), dtype=bool)
+                if support.shape[0] == len(cols):
+                    cols = list(np.array(cols)[support])
 
+        selected_features = cols
+    except Exception as e:
+        # fallback: mantener columnas originales
+        selected_features = list(X_df.columns)
     # 10) Resultado estandarizado
     elapsed = round(time.time() - t0, 4)
 
