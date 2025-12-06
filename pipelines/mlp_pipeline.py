@@ -320,8 +320,8 @@ def mlp_pipeline(
             X_train,
             y_train,
             X_test,
-            y_test,
             mask=mask,
+            use_smote=use_smote,
             hidden_layer_sizes=hidden_layer_sizes,
             activation=activation,
             solver=solver,
@@ -358,7 +358,7 @@ def mlp_pipeline(
         "model": "mlp",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": list(X_df.columns),
+        "selected_features": selected_features,
         "elapsed_seconds": elapsed,
         "extra_info": {
             "optimizer": (optimizer if isinstance(optimizer, str) else getattr(optimizer, "__name__", str(optimizer))),

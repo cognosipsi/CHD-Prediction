@@ -11,6 +11,7 @@ def mlp_evaluator(
     X_val: np.ndarray,
     *,
     mask: Optional[Sequence[int]] = None,
+    use_smote: bool = True,
     hidden_layer_sizes=(100,),
     activation="relu",
     solver="adam",
@@ -20,11 +21,13 @@ def mlp_evaluator(
     tol=1e-4,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
-    Entrena un MLP en el subset de features indicado por 'mask' y devuelve
-    (y_pred, y_proba). 'mask' puede ser:
-      - None -> usar todas las columnas
-      - máscara booleana/lista de 0/1
-      - lista/array de índices seleccionados
+    Entrena un MLP con soporte para SMOTE en el subset de features indicado por 'mask'.
+    
+    Flujo:
+      1. Aplicar mask a X_train y X_val
+      2. Aplicar SMOTE a X_train (si use_smote=True)
+      3. Entrenar MLPClassifier
+      4. Predecir en X_val (sin SMOTE)
     """
     n_features = X_train.shape[1]
 
@@ -46,6 +49,12 @@ def mlp_evaluator(
         idx = np.arange(n_features)
     Xtr = X_train[:, idx]
     Xv  = X_val[:,   idx]
+
+    # Aplicar SMOTE si está habilitado
+    if use_smote:
+        from imblearn.over_sampling import SMOTE
+        smote = SMOTE(random_state=random_state)
+        Xtr, y_train = smote.fit_resample(Xtr, y_train)
 
     clf = MLPClassifier(
         hidden_layer_sizes=hidden_layer_sizes,
