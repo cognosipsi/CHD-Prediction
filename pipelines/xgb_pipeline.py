@@ -20,7 +20,7 @@ from selectores.bsocv import BSOFeatureSelector
 from selectores.woa import WOAFeatureSelector
 from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
-#Optimizadores
+# Optimizadores
 from optimizadores.gridSearchCV import save_metrics_to_csv
 
 # === Reporte (igual que MLP) ===
@@ -34,7 +34,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.metrics import f1_score
+from sklearn.metrics import roc_auc_score
+
 
 def xgb_pipeline(
     file_path: str,
@@ -47,7 +48,7 @@ def xgb_pipeline(
     test_size: float = 0.3,
     random_state: int = 42,
     use_smote: bool = True,
-    optimizer: Optional[str] = "none", 
+    optimizer: Optional[str] = "none",
     **selector_params,
 ) -> Dict[str, Any]:
     """
@@ -59,7 +60,7 @@ def xgb_pipeline(
     - Escalado con scale_features().
     - (Opcional) SMOTE dentro del pipeline.
     - Clasificador XGB construido con build_xgb().
-    - (Opcional) GridSearchCV sobre clf__*.
+    - (Opcional) GridSearchCV sobre clf__* (optimizado por ROC-AUC).
 
     Devuelve un diccionario sencillo con métricas, nombre del selector, etc.
     """
@@ -121,19 +122,20 @@ def xgb_pipeline(
     # 6) Selección de características (opcional) sobre DataFrame (para preservar nombres)
     sel = (selector or "none").strip().lower() if selector is not None else "none"
     selector_name = "Sin selector (todas las variables)"
+    selector_est = None
 
     # Caso sin selector
     if sel in {"none", "sin", "no"}:
         selector_est = None  # no se añade nada a steps
 
-    if sel in {'m-abc', 'mabc', 'm_abc'}:
+    elif sel in {'m-abc', 'mabc', 'm_abc'}:
         population_size = int(selector_params.get("population_size", 20))
         max_iter = int(selector_params.get("max_iter", 30))
         limit = int(selector_params.get("limit", 5))
         patience = int(selector_params.get("patience", 10))
         cv_folds = int(selector_params.get("cv_folds", 5))
         knn_k = int(selector_params.get("knn_k", 5))
-        random_state_m  = selector_params.get("random_state", 42)
+        random_state_m = selector_params.get("random_state", 42)
         verbose = int(selector_params.get("verbose", 0))
 
         mabc = MABCFeatureSelector(
@@ -172,11 +174,11 @@ def xgb_pipeline(
     elif sel in {'bso-cv', 'bsocv', 'bso'}:
         # BSO-CV espera DataFrame para poder indexar columnas (usa X.iloc internamente)
         population_size = int(selector_params.get("population_size", 20))
-        max_iter        = int(selector_params.get("max_iter", 50))
-        cv              = int(selector_params.get("cv", 5))
-        random_state_b  = selector_params.get("random_state", random_state)
-        penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
-        verbose         = bool(selector_params.get("verbose", False))
+        max_iter = int(selector_params.get("max_iter", 50))
+        cv = int(selector_params.get("cv", 5))
+        random_state_b = selector_params.get("random_state", random_state)
+        penalty_weight = float(selector_params.get("penalty_weight", 0.01))
+        verbose = bool(selector_params.get("verbose", False))
 
         bso = BSOFeatureSelector(
             population_size=population_size,
@@ -191,7 +193,7 @@ def xgb_pipeline(
 
     else:
         raise ValueError(f"Selector desconocido: {selector}")
-    
+
     # 3.3) Escalado (usa exactamente la misma función que MLP/KNN)
     scaler = scale_features(scaler_type)
     steps.append(("scaler", scaler))
@@ -211,7 +213,6 @@ def xgb_pipeline(
         pipe = ImbPipeline(steps=steps)
     else:
         pipe = Pipeline(steps=steps)
-
 
     # 4) Train/test split usando tu helper split_data (sin SMOTE aquí)
     X_train, X_test, y_train, y_test = split_data(
@@ -253,7 +254,7 @@ def xgb_pipeline(
             pipe,
             param_grid=default_param_grid,
             cv=5,
-            scoring="f1_macro",
+            scoring="roc_auc",
             n_jobs=-1,
             refit=True,
         )
@@ -294,16 +295,22 @@ def xgb_pipeline(
     else:
         best_estimator.fit(X_train, y_train)
 
-
     # 6) Evaluación en test
     if opt in {"gridsearchcv", "run_grid_search"} and results:
-        # Escoger la iteración con mejor F1 en el conjunto de test
-        best_f1 = -np.inf
+        # Escoger la iteración con mejor ROC-AUC en el conjunto de test
+        best_roc_auc = -np.inf
         best_idx = 0
         for i, it in enumerate(results):
-            f1_i = f1_score(it["y_true"], it["y_pred"])
-            if f1_i > best_f1:
-                best_f1 = f1_i
+            y_true_i = it["y_true"]
+            y_proba_i = it["y_pred_prob"]
+            try:
+                auc_i = roc_auc_score(y_true_i, y_proba_i)
+            except ValueError:
+                # Puede fallar si y_true tiene una sola clase
+                continue
+
+            if auc_i > best_roc_auc:
+                best_roc_auc = auc_i
                 best_idx = i
 
         y_true = results[best_idx]["y_true"]
