@@ -10,17 +10,25 @@ def compute_classification_metrics(
 ) -> Dict[str, float]:
     """
     Calcula métricas de clasificación y retorna:
-    accuracy, precision, recall, f1, auc (NaN si no hay y_prob).
+    accuracy, precision, recall, f1 (binaria), f1_macro, auc (NaN si no hay y_prob),
+    más TP, FP, TN, FN.
     """
+
+    # F1 binario (clase positiva) – como ya tenías
+    f1_bin = f1_score(y_true, y_pred, zero_division=0)
+    # F1 macro (promedio de las dos clases)
+    f1_macro = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
     metrics = {
         "accuracy": accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
-        "f1": f1_score(y_true, y_pred, zero_division=0),
+        "f1": f1_bin,
+        "f1_macro": f1_macro,
     }
     metrics["auc"] = roc_auc_score(y_true, y_prob) if y_prob is not None else float("nan")
 
-        # Calculando la matriz de confusión para obtener los valores de los TP, TN, FP y FN
+    # Matriz de confusión para TP, TN, FP, FN
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     metrics["true_positive"] = tp
     metrics["false_positive"] = fp
@@ -79,6 +87,7 @@ def print_metrics(
     pre = metrics.get("precision", float("nan"))
     rec = metrics.get("recall", float("nan"))
     f1  = metrics.get("f1", float("nan"))
+    f1_macro = metrics.get("f1_macro", float("nan"))
     auc = metrics.get("auc", float("nan"))
     tp  = metrics.get("true_positive", float("nan"))
     fp  = metrics.get("false_positive", float("nan"))
@@ -89,6 +98,7 @@ def print_metrics(
     print(f"Precision: {pre:.4f}" if isinstance(pre, (int, float)) else f"Precision: {pre}")
     print(f"Recall:    {rec:.4f}" if isinstance(rec, (int, float)) else f"Recall:    {rec}")
     print(f"F1 Score:  {f1:.4f}" if isinstance(f1, (int, float)) else f"F1 Score:  {f1}")
+    print(f"F1 macro:  {f1_macro:.4f}" if isinstance(f1_macro, (int, float)) else f"F1 macro:  {f1_macro}")
     if isinstance(auc, (int, float)) and auc == auc:  # no NaN
         print(f"AUC:       {auc:.4f}")
     else:

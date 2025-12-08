@@ -80,29 +80,6 @@ def _build_selector_params(selector: str) -> dict:
         }
     return {}
 
-# Pretty print uniforme para todos los pipelines que devuelven un dict
-def _pretty_print_result(res: dict):
-    if not isinstance(res, dict):
-        print(res)
-        return
-    print("\n=== RESUMEN ===")
-    print(f"Modelo: {res.get('model')}")
-    sel_name = res.get("selector", "none")
-    if sel_name and sel_name != "none":
-        print(f"Selector: {sel_name}")
-    metrics = res.get("metrics", {})
-    if metrics:
-        print("Métricas:")
-        for k, v in metrics.items():
-            print(f"  - {k}: {v:.4f}" if isinstance(v, (int, float)) else f"  - {k}: {v}")
-    n_selected = res.get("n_selected")
-    if n_selected is not None:
-        print(f"Features seleccionadas: {n_selected}")
-    cols = res.get("selected_features")
-    if cols:
-        print("Columnas:")
-        print(", ".join(map(str, cols)))
-
 def _normalize_scaler_name(name: str) -> str:
     aliases = {
         "standardscaler": "standard",
@@ -147,4 +124,3 @@ if __name__ == "__main__":
         optimizer=None if OPTIMIZERS.get(optimizer) in (None, "none") else "gridsearchcv",
         **(selector_params or {}),
     )
-    _pretty_print_result(res)

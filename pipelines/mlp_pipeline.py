@@ -226,7 +226,7 @@ def mlp_pipeline(
 
         # Recoger resultados por combinación de hiperparámetros (una fila por iteración)
         results = []
-        best_f1 = float("-inf")
+        best_f1_macro = float("-inf")
         best_result_for_print = None
 
         for i, params in enumerate(gs.cv_results_["params"]):
@@ -246,21 +246,20 @@ def mlp_pipeline(
             # Métricas en test para poder quedarnos con el mejor F1
             metrics_i = compute_classification_metrics(y_test, y_pred_i, y_proba_i)
 
-            # Intentamos distintas claves posibles para F1
-            f1_i = None
+            # F1 macro como criterio principal (con pequeños fallbacks por compatibilidad)
             if isinstance(metrics_i, dict):
-                if "f1_score" in metrics_i:
-                    f1_i = metrics_i["f1_score"]
-                elif "f1_macro" in metrics_i:
-                    f1_i = metrics_i["f1_macro"]
-                elif "f1" in metrics_i:
-                    f1_i = metrics_i["f1"]
+                f1_macro_i = metrics_i.get("f1_macro")
+                if f1_macro_i is None:
+                    # Por si aún no actualizaste compute_classification_metrics
+                    f1_macro_i = metrics_i.get("f1_score", metrics_i.get("f1", 0.0))
+            else:
+                f1_macro_i = 0.0
 
-            if f1_i is None:
-                f1_i = 0.0
+            if f1_macro_i is None:
+                f1_macro_i = 0.0
 
-            if f1_i > best_f1:
-                best_f1 = f1_i
+            if f1_macro_i > best_f1_macro:
+                best_f1_macro = f1_macro_i
                 best_result_for_print = {
                     "iteration": i + 1,
                     "hyperparameters": params,
@@ -282,7 +281,7 @@ def mlp_pipeline(
 
         # Imprimir resultados del registro con mejor F1 en test
         if best_result_for_print is not None:
-            print("\n=== Registro con mejor F1-score (test) ===")
+            print("\n=== Registro con mejor F1-Macro (test) ===")
             print(f"Iteración (1-based): {best_result_for_print['iteration']}")
             print("Hiperparámetros:")
             for k, v in best_result_for_print["hyperparameters"].items():
@@ -290,12 +289,12 @@ def mlp_pipeline(
             print("Métricas:")
             for k, v in best_result_for_print["metrics"].items():
                 print(f"  {k}: {v}")
-
+                
+        # El modelo final sigue siendo el best_estimator_ de GridSearchCV
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
         model = pipe.fit(X_train, y_train)
-
 
     # 7) Evaluación en test
     # Recuperamos (si existe) el selector del pipeline final
