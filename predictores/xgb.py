@@ -6,6 +6,13 @@ DEFAULT_PARAMS: Dict[str, Any] = dict(
     eval_metric="logloss",
     random_state=42,
     verbosity=0,
+    objective = "binary:hinge",
+    n_estimators = 100,
+    learning_rate = 0.3,
+    max_depth = 6,
+    subsample = 1,
+    colsample_bytree = 1,
+    min_child_weight = 1,
 )
 
 def build_xgb(custom_params: Optional[Dict[str, Any]] = None) -> XGBClassifier:

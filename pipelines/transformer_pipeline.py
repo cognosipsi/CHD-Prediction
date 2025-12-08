@@ -279,16 +279,16 @@ def transformer_pipeline(
         }
         cv_folds = int(selector_params.get("cv", 5))
 
-        # scorer manual para F1 (binario, clase positiva=1)
-        def f1_scorer(estimator, X_val, y_val):
+        # scorer manual para F1 macro (promedio de las clases)
+        def f1_macro_scorer(estimator, X_val, y_val):
             y_pred = estimator.predict(X_val)
-            return f1_score(y_val, y_pred)
+            return f1_score(y_val, y_pred, average="macro")
 
         gs = GridSearchCV(
             pipe,
             param_grid=param_grid,
             cv=cv_folds,
-            scoring=f1_scorer,  # optimizamos ROC-AUC
+            scoring=f1_macro_scorer,  # optimizamos F1 macro
             n_jobs=-1,
         )
         with warnings.catch_warnings():

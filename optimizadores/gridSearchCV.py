@@ -111,14 +111,15 @@ def save_metrics_to_csv(results, model_name, filename_prefix="model_metrics"):
     metrics_list = []
 
     for iter_idx, result in enumerate(results, start=1):
-        f1 = f1_score(result['y_true'], result['y_pred'])
+        # === CAMBIO: usar F1 macro ===
+        f1_macro = f1_score(result['y_true'], result['y_pred'], average='macro')
         roc_auc = roc_auc_score(result['y_true'], result['y_pred_prob'])
         conf_matrix = confusion_matrix(result['y_true'], result['y_pred']).tolist()
         hyperparameters = result['hyperparameters']
 
         metrics_list.append({
             'iteracion': iter_idx,                # id de iteración
-            'f1_score': round(f1, 4),
+            'f1_score_macro': round(f1_macro, 4), # CAMBIO EN EL NOMBRE DE LA COLUMNA
             'roc_auc': round(roc_auc, 4),
             'conf_matrix': conf_matrix,
             'mean_cv_score': result.get('mean_test_score'),

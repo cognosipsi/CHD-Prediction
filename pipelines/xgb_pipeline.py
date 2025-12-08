@@ -34,7 +34,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import f1_score
 
 
 def xgb_pipeline(
@@ -254,7 +254,7 @@ def xgb_pipeline(
             pipe,
             param_grid=default_param_grid,
             cv=5,
-            scoring="roc_auc",
+            scoring="f1_macro",
             n_jobs=-1,
             refit=True,
         )
@@ -297,20 +297,15 @@ def xgb_pipeline(
 
     # 6) Evaluación en test
     if opt in {"gridsearchcv", "run_grid_search"} and results:
-        # Escoger la iteración con mejor ROC-AUC en el conjunto de test
-        best_roc_auc = -np.inf
+        # Escoger la iteración con mejor F1-macro en el conjunto de test
+        best_f1_macro = -np.inf
         best_idx = 0
         for i, it in enumerate(results):
             y_true_i = it["y_true"]
-            y_proba_i = it["y_pred_prob"]
-            try:
-                auc_i = roc_auc_score(y_true_i, y_proba_i)
-            except ValueError:
-                # Puede fallar si y_true tiene una sola clase
-                continue
-
-            if auc_i > best_roc_auc:
-                best_roc_auc = auc_i
+            y_pred_i = it["y_pred"]
+            f1_i = f1_score(y_true_i, y_pred_i, average="macro")
+            if f1_i > best_f1_macro:
+                best_f1_macro = f1_i
                 best_idx = i
 
         y_true = results[best_idx]["y_true"]
