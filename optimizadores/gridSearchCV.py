@@ -78,7 +78,7 @@ def run_grid_search(
     y,
     *,
     cv: int = 5,
-    scoring: str = "f1",
+    scoring: str = "roc_auc",  # === CAMBIO: ahora optimiza ROC-AUC por defecto ===
     param_grid: Optional[Dict[str, list]] = None,
     n_jobs: int = -1,
     **base,
@@ -91,7 +91,10 @@ def run_grid_search(
     if est is None:
         return None
     grid = param_grid or get_param_grid(model)
-    scorer = make_scorer(f1_score) if scoring == "f1" else scoring
+
+    # === CAMBIO: scorer por defecto ROC-AUC ===
+    scorer = "roc_auc" if scoring == "roc_auc" else scoring
+
     gs = GridSearchCV(est, grid, cv=cv, scoring=scorer, n_jobs=n_jobs)
     gs.fit(X, y)
     return {
@@ -99,6 +102,7 @@ def run_grid_search(
         "best_params": gs.best_params_,
         "best_score": gs.best_score_,
     }
+
 
 def save_metrics_to_csv(results, model_name, filename_prefix="model_metrics"):
     # Obtener la fecha y hora actuales para el nombre del archivo
