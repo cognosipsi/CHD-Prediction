@@ -18,13 +18,13 @@ from selectores.eliminacionpearson import PearsonRedundancyEliminator
 # Predictor
 from predictores.mlp import mlp_evaluator
 
-#Optimizadores
+# Optimizadores
 from optimizadores.gridSearchCV import save_metrics_to_csv
 
 # Reporte
 from utils.evaluacion import compute_classification_metrics, print_from_pipeline_result
 
-#sklearn & imblearn
+# sklearn & imblearn
 import warnings
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import GridSearchCV
@@ -34,6 +34,8 @@ from sklearn.base import clone
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 from sklearn.pipeline import Pipeline
+from sklearn.metrics import roc_auc_score
+
 
 def mlp_pipeline(
     file_path: str = "SAHeart.csv",
@@ -45,9 +47,9 @@ def mlp_pipeline(
     hidden_layer_sizes=(100,),
     activation: str = "relu",
     solver: str = "adam",
-    max_iter: int = 1000,              # = mlpWOA.py
+    max_iter: int = 1000,             # = mlpWOA.py
     random_state: int = 42,
-    early_stopping: bool = True,     # = mlpWOA.py
+    early_stopping: bool = True,      # = mlpWOA.py
     tol: float = 1e-4,
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
@@ -80,9 +82,11 @@ def mlp_pipeline(
     feature_names = list(X_df.columns)
 
     # 4) Hold-out split (sin SMOTE aquí)
-    X_train, X_test, y_train, y_test = split_data(X_df.values, y, test_size=0.3, random_state=random_state)
+    X_train, X_test, y_train, y_test = split_data(
+        X_df.values, y, test_size=0.3, random_state=random_state
+    )
 
-    # 6) Construcción del Pipeline de imblearn
+    # 5) Construcción del Pipeline de imblearn
     steps = []
 
     # 4) Selección de características (opcional) — incluye BSO-CV, M-ABC y WOA
@@ -90,9 +94,8 @@ def mlp_pipeline(
     selector_name = None
 
     if sel in ("bso", "bso-cv", "bsocv"):
-        # Igual que antes: no requiere escalado global
         population_size = int(selector_params.get("population_size", 20))
-        max_iter        = int(selector_params.get("max_iter", 50))
+        max_iter_sel    = int(selector_params.get("max_iter", 50))
         cv              = int(selector_params.get("cv", 5))
         random_state_b  = selector_params.get("random_state", None)
         penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
@@ -100,31 +103,29 @@ def mlp_pipeline(
 
         bso = BSOFeatureSelector(
             population_size=population_size,
-            max_iter=max_iter,
+            max_iter=max_iter_sel,
             cv=cv,
             random_state=random_state_b,
             penalty_weight=penalty_weight,
             verbose=verbose,
         )
         steps.append(("selector", bso))
-        selector_name = f"BSO-CV (pop={population_size}, iters={max_iter}, cv={cv})"
+        selector_name = f"BSO-CV (pop={population_size}, iters={max_iter_sel}, cv={cv})"
 
     elif sel in ("m-abc", "mabc", "m_abc"):
-        # Escalado rápido sobre TODO X SOLO para el selector (heurística interna)
-
-        population_size     = int(selector_params.get("population_size", 20))
-        max_iter   = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
-        limit        = int(selector_params.get("limit", 5))
-        patience     = int(selector_params.get("patience", 10))
-        random_state_s = selector_params.get("random_state", 42)
-        cv_folds     = int(selector_params.get("cv_folds", 5))
-        knn_k        = int(selector_params.get("knn_k", 5))
-        verbose      = bool(selector_params.get("verbose", False))
+        population_size = int(selector_params.get("population_size", 20))
+        max_iter_sel    = int(selector_params.get("max_iter", selector_params.get("max_iter", 30)))
+        limit           = int(selector_params.get("limit", 5))
+        patience        = int(selector_params.get("patience", 10))
+        random_state_s  = selector_params.get("random_state", 42)
+        cv_folds        = int(selector_params.get("cv_folds", 5))
+        knn_k           = int(selector_params.get("knn_k", 5))
+        verbose         = bool(selector_params.get("verbose", False))
 
         mabc = MABCFeatureSelector(
             knn_k=knn_k,
             population_size=population_size,
-            max_iter=max_iter,     # <- importante
+            max_iter=max_iter_sel,
             limit=limit,
             patience=patience,
             cv_folds=cv_folds,
@@ -132,18 +133,19 @@ def mlp_pipeline(
             verbose=verbose,
         )
         steps.append(("selector", mabc))
-        selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
+        selector_name = (
+            f"M-ABC (pop={population_size}, cycles={max_iter_sel}, "
+            f"cv={cv_folds}, k={knn_k})"
+        )
 
     elif sel in ("woa", "whale", "whale-optimization"):
-        # WOA: para coherencia con MLP, usamos KNN en el fitness + pre-escalado temporal
-        n_neighbors = int(selector_params.get("n_neighbors", 3))
+        n_neighbors    = int(selector_params.get("n_neighbors", 3))
         population_size = int(selector_params.get("population_size", 20))
-        max_iter = int(selector_params.get("max_iter", 50))
-        cv = int(selector_params.get("cv", 5))
-        penalty_weight = float(selector_params.get("penalty_weight", 0.01))
-        random_state_w = selector_params.get("random_state", 42)
+        max_iter_sel    = int(selector_params.get("max_iter", 50))
+        cv              = int(selector_params.get("cv", 5))
+        penalty_weight  = float(selector_params.get("penalty_weight", 0.01))
+        random_state_w  = selector_params.get("random_state", 42)
 
-        # Escalado dentro de la CV del fitness de WOA:
         estimator_for_fitness = Pipeline([
             ("scaler", scale_features(scaler_type)),
             ("knn", KNeighborsClassifier(n_neighbors=n_neighbors)),
@@ -151,25 +153,27 @@ def mlp_pipeline(
 
         woa = WOAFeatureSelector(
             population_size=population_size,
-            max_iter=max_iter,
-            estimator=estimator_for_fitness,  # evita fuga: el escalado está dentro de la CV interna
+            max_iter=max_iter_sel,
+            estimator=estimator_for_fitness,
             cv=cv,
             penalty_weight=penalty_weight,
             random_state=random_state_w,
         )
         steps.append(("selector", woa))
-        selector_name = f"WOA (pop={population_size}, iters={max_iter}, cv={cv}, k={n_neighbors})"
+        selector_name = (
+            f"WOA (pop={population_size}, iters={max_iter_sel}, "
+            f"cv={cv}, k={n_neighbors})"
+        )
 
     elif sel in ("none", "sin", "no"):
         selector_name = "none"
-        pass
     else:
         raise ValueError("Selector desconocido: usa 'bso-cv', 'm-abc', 'woa' o None.")
 
     # Paso SMOTE (opcional, DENTRO del pipeline)
     if use_smote:
         steps.append(("smote", SMOTE(random_state=random_state)))
-        
+
     # Scaler + Clasificador
     steps.append(("scaler", scale_features(scaler_type)))
 
@@ -199,9 +203,9 @@ def mlp_pipeline(
         param_grid = {
             "selector__population_size": [selector_params.get("population_size", 20)],
             "selector__max_iter": [selector_params.get("max_iter", 50)],
-            "clf__hidden_layer_sizes": [(50,), (100,), (150,)],  # Agregado según el archivo gridSearchCV.py
-            "clf__activation": ["relu", "tanh"],                  # Agregado según el archivo gridSearchCV.py
-            "clf__solver": ["adam", "sgd"],                       # Agregado según el archivo gridSearchCV.py
+            "clf__hidden_layer_sizes": [(50,), (100,), (150,)],
+            "clf__activation": ["relu", "tanh"],
+            "clf__solver": ["adam", "sgd"],
             "clf__max_iter": [200, 500, 1000],
         }
 
@@ -217,8 +221,15 @@ def mlp_pipeline(
                 }
             )
 
-        gs = GridSearchCV(pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1)
-        
+        # ⬇️ Aquí cambiamos f1_macro por roc_auc
+        gs = GridSearchCV(
+            pipe,
+            param_grid=param_grid,
+            cv=5,
+            scoring="roc_auc",
+            n_jobs=-1,
+        )
+
         # Silenciar los warnings de convergencia dentro de GridSearchCV
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
@@ -226,7 +237,7 @@ def mlp_pipeline(
 
         # Recoger resultados por combinación de hiperparámetros (una fila por iteración)
         results = []
-        best_f1_macro = float("-inf")
+        best_roc_auc = float("-inf")
         best_result_for_print = None
 
         for i, params in enumerate(gs.cv_results_["params"]):
@@ -243,23 +254,18 @@ def mlp_pipeline(
             else:
                 y_proba_i = y_pred_i
 
-            # Métricas en test para poder quedarnos con el mejor F1
+            # Métricas en test (todas las que defina compute_classification_metrics)
             metrics_i = compute_classification_metrics(y_test, y_pred_i, y_proba_i)
 
-            # F1 macro como criterio principal (con pequeños fallbacks por compatibilidad)
-            if isinstance(metrics_i, dict):
-                f1_macro_i = metrics_i.get("f1_macro")
-                if f1_macro_i is None:
-                    # Por si aún no actualizaste compute_classification_metrics
-                    f1_macro_i = metrics_i.get("f1_score", metrics_i.get("f1", 0.0))
-            else:
-                f1_macro_i = 0.0
+            # Calcular ROC AUC en test para decidir "mejor" registro
+            try:
+                roc_auc_i = roc_auc_score(y_test, y_proba_i)
+            except ValueError:
+                # Por si ocurre algún problema (por ejemplo, solo una clase en y_test)
+                roc_auc_i = 0.0
 
-            if f1_macro_i is None:
-                f1_macro_i = 0.0
-
-            if f1_macro_i > best_f1_macro:
-                best_f1_macro = f1_macro_i
+            if roc_auc_i > best_roc_auc:
+                best_roc_auc = roc_auc_i
                 best_result_for_print = {
                     "iteration": i + 1,
                     "hyperparameters": params,
@@ -279,9 +285,9 @@ def mlp_pipeline(
         # Guardar métricas de todas las iteraciones del grid
         save_metrics_to_csv(results, model_name="mlp")
 
-        # Imprimir resultados del registro con mejor F1 en test
+        # Imprimir resultados del registro con mejor ROC AUC en test
         if best_result_for_print is not None:
-            print("\n=== Registro con mejor F1-Macro (test) ===")
+            print("\n=== Registro con mejor ROC AUC (test) ===")
             print(f"Iteración (1-based): {best_result_for_print['iteration']}")
             print("Hiperparámetros:")
             for k, v in best_result_for_print["hyperparameters"].items():
@@ -289,8 +295,7 @@ def mlp_pipeline(
             print("Métricas:")
             for k, v in best_result_for_print["metrics"].items():
                 print(f"  {k}: {v}")
-                
-        # El modelo final sigue siendo el best_estimator_ de GridSearchCV
+
         model = gs.best_estimator_
         best_params = gs.best_params_
     else:
@@ -360,7 +365,11 @@ def mlp_pipeline(
         "selected_features": selected_features,
         "elapsed_seconds": elapsed,
         "extra_info": {
-            "optimizer": (optimizer if isinstance(optimizer, str) else getattr(optimizer, "__name__", str(optimizer))),
+            "optimizer": (
+                optimizer
+                if isinstance(optimizer, str)
+                else getattr(optimizer, "__name__", str(optimizer))
+            ),
             "best_params": best_params,
         },
     }

@@ -31,7 +31,7 @@ from sklearn.exceptions import ConvergenceWarning
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 
-from sklearn.metrics import f1_score
+from sklearn.metrics import roc_auc_score
 
 
 def transformer_pipeline(
@@ -279,16 +279,29 @@ def transformer_pipeline(
         }
         cv_folds = int(selector_params.get("cv", 5))
 
-        # scorer manual para F1 macro (promedio de las clases)
-        def f1_macro_scorer(estimator, X_val, y_val):
-            y_pred = estimator.predict(X_val)
-            return f1_score(y_val, y_pred, average="macro")
+        # scorer manual para ROC-AUC (binario)
+        def roc_auc_scorer(estimator, X_val, y_val):
+            # Usamos predict_proba si existe
+            if hasattr(estimator, "predict_proba"):
+                proba = estimator.predict_proba(X_val)
+                # asumimos problema binario -> usamos prob. de la clase positiva
+                if proba.ndim == 2 and proba.shape[1] > 1:
+                    y_score = proba[:, 1]
+                else:
+                    y_score = proba.ravel()
+            else:
+                # fallback: decision_function o, en última instancia, predict
+                if hasattr(estimator, "decision_function"):
+                    y_score = estimator.decision_function(X_val)
+                else:
+                    y_score = estimator.predict(X_val)
+            return roc_auc_score(y_val, y_score)
 
         gs = GridSearchCV(
             pipe,
             param_grid=param_grid,
             cv=cv_folds,
-            scoring=f1_macro_scorer,  # optimizamos F1 macro
+            scoring=roc_auc_scorer,  # optimizamos ROC-AUC
             n_jobs=-1,
         )
         with warnings.catch_warnings():

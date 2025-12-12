@@ -14,8 +14,8 @@ from preprocesamiento.division_dataset import split_data
 # Selectores ya modularizados
 from selectores.bsocv import BSOFeatureSelector
 from selectores.mabc import MABCFeatureSelector
-from selectores.woa import WOAFeatureSelector   
-from selectores.eliminacionpearson import PearsonRedundancyEliminator     
+from selectores.woa import WOAFeatureSelector
+from selectores.eliminacionpearson import PearsonRedundancyEliminator
 
 # Predictores KNN (funciones en predictores/knn.py)
 from predictores.knn import knn_evaluator
@@ -29,12 +29,13 @@ from utils.evaluacion import compute_classification_metrics, print_from_pipeline
 #sklearn & imblearn
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV
-from sklearn.pipeline import Pipeline as SkPipeline  
+from sklearn.pipeline import Pipeline as SkPipeline
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, roc_auc_score
+
 
 def knn_pipeline(
     file_path: str,
@@ -45,7 +46,7 @@ def knn_pipeline(
     redundancy: Optional[str] = "none",  # <-- NUEVO
     use_smote: bool = True,
     optimizer: Optional[str] = "none",
-    n_neighbors: int = 3, 
+    n_neighbors: int = 3,
     random_state: int = 42,
     **selector_params,
 ):
@@ -90,8 +91,6 @@ def knn_pipeline(
     if redundancy is not None and str(redundancy).lower() not in {"none", "sin", "no"}:
         steps.append(("redundancy", PearsonRedundancyEliminator(metodo=redundancy)))
 
-    # 4) Si el selector es WOA (función no-transformer), aplicamos máscara **antes** del split
-    # (nota: para usar WOA dentro de CV haría falta envolverlo como Transformer).
     sel = (selector or "none").strip().lower() if selector is not None else "none"
     selector_name = None
 
@@ -127,7 +126,7 @@ def knn_pipeline(
         mabc = MABCFeatureSelector(
             knn_k=knn_k,
             population_size=population_size,
-            max_iter=max_iter,  
+            max_iter=max_iter,
             limit=limit,
             patience=patience,
             cv_folds=cv_folds,
@@ -139,7 +138,6 @@ def knn_pipeline(
         selector_name = f"M-ABC (pop={population_size}, cycles={max_iter}, cv={cv_folds}, k={knn_k})"
 
     elif sel in ("woa", "whale", "ballenas"):
-        # WOA: para coherencia con KNN, usamos KNN en el fitness + pre-escalado temporal
         n_neighbors = int(selector_params.get("n_neighbors", 3))
         population_size = int(selector_params.get("population_size", 20))
         max_iter = int(selector_params.get("max_iter", 50))
@@ -147,7 +145,6 @@ def knn_pipeline(
         penalty_weight = float(selector_params.get("penalty_weight", 0.01))
         random_state_w = selector_params.get("random_state", 42)
 
-        # Escalado dentro de la CV del fitness de WOA:
         estimator_for_fitness = SkPipeline([
             ("scaler", scale_features(scaler_type)),
             ("knn", KNeighborsClassifier(n_neighbors=n_neighbors)),
@@ -156,7 +153,7 @@ def knn_pipeline(
         woa = WOAFeatureSelector(
             population_size=population_size,
             max_iter=max_iter,
-            estimator=estimator_for_fitness,  # evita fuga: el escalado está dentro de la CV interna
+            estimator=estimator_for_fitness,
             cv=cv,
             penalty_weight=penalty_weight,
             random_state=random_state_w,
@@ -190,14 +187,12 @@ def knn_pipeline(
 
     # 7) Entrenamiento (con o sin GridSearch) sobre el PIPELINE COMPLETO
     if optimizer and str(optimizer).lower() == "gridsearchcv":
-        # Grid genérico
         param_grid = {
             "clf__n_neighbors": [3, 5, 7, 10, 17],
             "clf__weights": ["uniform", "distance"],
             "clf__metric": ["minkowski", "euclidean", "manhattan"],
         }
 
-        # Solo añadimos hiperparámetros del selector si existe
         if any(name == "selector" for name, _ in steps):
             param_grid.update(
                 {
@@ -207,23 +202,20 @@ def knn_pipeline(
             )
 
         gs = GridSearchCV(
-            pipe, param_grid=param_grid, cv=5, scoring="f1_macro", n_jobs=-1
+            pipe, param_grid=param_grid, cv=5, scoring="roc_auc", n_jobs=-1
         )
-        
-        # Ignoramos warnings de convergencia durante la búsqueda
+
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             gs.fit(X_train, y_train)
 
         results = []
-        best_f1 = -np.inf
+        best_roc_auc = -np.inf
         best_y_pred = None
         best_y_proba = None
         best_params = None
 
-        # Recorremos todas las combinaciones de hiperparámetros evaluadas
         for i, params in enumerate(gs.cv_results_["params"]):
-            # Clonamos el pipeline base y le ponemos estos hiperparámetros
             model_i = clone(pipe)
             model_i.set_params(**params)
 
@@ -231,14 +223,19 @@ def knn_pipeline(
                 warnings.filterwarnings("ignore", category=ConvergenceWarning)
                 model_i.fit(X_train, y_train)
 
-            # Predicciones de este modelo en el test hold-out
             y_pred_i = model_i.predict(X_test)
             if hasattr(model_i, "predict_proba"):
                 y_proba_i = model_i.predict_proba(X_test)[:, 1]
             else:
                 y_proba_i = y_pred_i
 
-            # F1 macro en test para seleccionar el mejor registro
+            # ROC-AUC en test para seleccionar el mejor registro
+            try:
+                roc_auc_i = roc_auc_score(y_test, y_proba_i)
+            except ValueError:
+                roc_auc_i = np.nan
+
+            # (opcional) mantener F1 macro como columna extra en el CSV
             f1_i = f1_score(y_test, y_pred_i, average="macro")
 
             iteration_result = {
@@ -247,25 +244,26 @@ def knn_pipeline(
                 "y_pred_prob": y_proba_i,
                 "hyperparameters": params,
                 "cv_folds": gs.cv,
+                "roc_auc": roc_auc_i,
                 "f1_macro": f1_i,
             }
             results.append(iteration_result)
 
-            if f1_i > best_f1:
-                best_f1 = f1_i
+            if (not np.isnan(roc_auc_i)) and (roc_auc_i > best_roc_auc):
+                best_roc_auc = roc_auc_i
                 best_params = params
                 best_y_pred = y_pred_i
                 best_y_proba = y_proba_i
 
-        # Llamada a save_metrics_to_csv con los resultados
         save_metrics_to_csv(results, model_name="knn")
 
-        # Mensaje explícito del mejor registro según F1 macro en test
-        print("\n[GridSearchCV - mejor registro según F1 macro en test]")
-        print(f"Mejor F1 macro: {best_f1:.4f}")
+        print("\n[GridSearchCV - mejor registro según ROC-AUC en test]")
+        if np.isfinite(best_roc_auc):
+            print(f"Mejor ROC-AUC: {best_roc_auc:.4f}")
+        else:
+            print("Mejor ROC-AUC: NaN (no fue posible calcular ROC-AUC en test)")
         print(f"Mejores hiperparámetros: {best_params}\n")
 
-        # Entrenamos el modelo final con los mejores hiperparámetros hallados
         model = clone(pipe)
         if best_params is not None:
             model.set_params(**best_params)
@@ -274,15 +272,13 @@ def knn_pipeline(
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             model.fit(X_train, y_train)
 
-        # Métricas finales sobre test usando el mejor registro
         metrics = compute_classification_metrics(y_test, best_y_pred, best_y_proba)
+
     else:
-        # Entrenamiento sin optimización de hiperparámetros
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             model = pipe.fit(X_train, y_train)
 
-        # Predicciones del pipeline completo (sin knn_evaluator)
         y_pred = model.predict(X_test)
         if hasattr(model, "predict_proba"):
             y_proba = model.predict_proba(X_test)[:, 1]
@@ -300,28 +296,23 @@ def knn_pipeline(
         elif hasattr(sel_step, "best_score_"):
             fitness_for_report = getattr(sel_step, "best_score_", None)
 
-        # 9) Features seleccionadas (si el selector expone get_support)
+    # 9) Features seleccionadas
     selected_features = list(X_df.columns)
     try:
-        # empezamos desde los nombres originales
         cols = list(X_df.columns)
 
-        # si hay un paso de redundancia que expone get_feature_names_out, usarlo
         if hasattr(model, "named_steps") and "redundancy" in model.named_steps:
             red = model.named_steps["redundancy"]
             if hasattr(red, "get_feature_names_out"):
                 cols = list(red.get_feature_names_out(cols))
             else:
-                # intentar inferir nombres aplicando transform sobre el DataFrame
                 try:
                     transformed = red.transform(X_df)
                     if hasattr(transformed, "columns"):
                         cols = list(transformed.columns)
                 except Exception:
-                    # fallback: mantener cols sin cambios
                     pass
 
-        # luego aplicar la máscara del selector (si la hay)
         if hasattr(model, "named_steps") and "selector" in model.named_steps:
             sel_step = model.named_steps["selector"]
             if hasattr(sel_step, "get_support"):
@@ -331,12 +322,10 @@ def knn_pipeline(
 
         selected_features = cols
     except Exception as e:
-        # fallback: mantener columnas originales
         selected_features = list(X_df.columns)
-    # 10) Resultado estandarizado
+
     elapsed = round(time.time() - t0, 4)
 
-    # Recuperamos el fitness del selector si está disponible
     fitness_for_report = None
     if any(name == "selector" for name, _ in model.steps):
         sel_step = model.named_steps.get("selector")
@@ -349,7 +338,7 @@ def knn_pipeline(
         "model": "knn",
         "selector": selector_name,
         "metrics": metrics,
-        "selected_features": selected_features, 
+        "selected_features": selected_features,
         "selector_fitness": fitness_for_report,
         "elapsed_seconds": elapsed,
         "extra_info": {
